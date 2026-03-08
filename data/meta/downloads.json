@@ -1,0 +1,112 @@
+[
+  {
+    "ticker": "AAPL",
+    "fy": 2024,
+    "form": "10-K",
+    "filing_date": "2024-11-01",
+    "report_date": "2024-09-28",
+    "accession": "0000320193-24-000123",
+    "primary_doc": "aapl-20240928.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\AAPL_FY2024_2024-09-28_000032019324000123_aapl-20240928.htm"
+  },
+  {
+    "ticker": "AAPL",
+    "fy": 2025,
+    "form": "10-K",
+    "filing_date": "2025-10-31",
+    "report_date": "2025-09-27",
+    "accession": "0000320193-25-000079",
+    "primary_doc": "aapl-20250927.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\AAPL_FY2025_2025-09-27_000032019325000079_aapl-20250927.htm"
+  },
+  {
+    "ticker": "META",
+    "fy": 2024,
+    "form": "10-K",
+    "filing_date": "2025-01-30",
+    "report_date": "2024-12-31",
+    "accession": "0001326801-25-000017",
+    "primary_doc": "meta-20241231.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1326801/000132680125000017/meta-20241231.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\META_FY2024_2024-12-31_000132680125000017_meta-20241231.htm"
+  },
+  {
+    "ticker": "META",
+    "fy": 2025,
+    "form": "10-K",
+    "filing_date": "2026-01-29",
+    "report_date": "2025-12-31",
+    "accession": "0001628280-26-003942",
+    "primary_doc": "meta-20251231.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\META_FY2025_2025-12-31_000162828026003942_meta-20251231.htm"
+  },
+  {
+    "ticker": "NVDA",
+    "fy": 2024,
+    "form": "10-K",
+    "filing_date": "2024-02-21",
+    "report_date": "2024-01-28",
+    "accession": "0001045810-24-000029",
+    "primary_doc": "nvda-20240128.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000029/nvda-20240128.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\NVDA_FY2024_2024-01-28_000104581024000029_nvda-20240128.htm"
+  },
+  {
+    "ticker": "NVDA",
+    "fy": 2025,
+    "form": "10-K",
+    "filing_date": "2025-02-26",
+    "report_date": "2025-01-26",
+    "accession": "0001045810-25-000023",
+    "primary_doc": "nvda-20250126.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\NVDA_FY2025_2025-01-26_000104581025000023_nvda-20250126.htm"
+  },
+  {
+    "ticker": "GOOGL",
+    "fy": 2024,
+    "form": "10-K",
+    "filing_date": "2025-02-05",
+    "report_date": "2024-12-31",
+    "accession": "0001652044-25-000014",
+    "primary_doc": "goog-20241231.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204425000014/goog-20241231.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\GOOGL_FY2024_2024-12-31_000165204425000014_goog-20241231.htm"
+  },
+  {
+    "ticker": "GOOGL",
+    "fy": 2025,
+    "form": "10-K",
+    "filing_date": "2026-02-05",
+    "report_date": "2025-12-31",
+    "accession": "0001652044-26-000018",
+    "primary_doc": "goog-20251231.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\GOOGL_FY2025_2025-12-31_000165204426000018_goog-20251231.htm"
+  },
+  {
+    "ticker": "TSLA",
+    "fy": 2024,
+    "form": "10-K",
+    "filing_date": "2025-01-30",
+    "report_date": "2024-12-31",
+    "accession": "0001628280-25-003063",
+    "primary_doc": "tsla-20241231.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828025003063/tsla-20241231.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\TSLA_FY2024_2024-12-31_000162828025003063_tsla-20241231.htm"
+  },
+  {
+    "ticker": "TSLA",
+    "fy": 2025,
+    "form": "10-K",
+    "filing_date": "2026-01-29",
+    "report_date": "2025-12-31",
+    "accession": "0001628280-26-003952",
+    "primary_doc": "tsla-20251231.htm",
+    "url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026003952/tsla-20251231.htm",
+    "path": "C:\\Users\\riddh\\OneDrive\\Desktop\\financial_analysis_tool\\data\\raw_html\\TSLA_FY2025_2025-12-31_000162828026003952_tsla-20251231.htm"
+  }
+]

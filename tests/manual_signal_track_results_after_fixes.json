@@ -1,0 +1,388 @@
+[
+  {
+    "query": "What was AAPL revenue in 2024?",
+    "plan.mode": "lookup_numeric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "audited_facts_prefer_filing"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "claim_type": "fact",
+        "entity": "AAPL",
+        "metric_or_topic": "revenue",
+        "period": "FY2024",
+        "unit": "USD",
+        "value_or_summary": 391035000000.0,
+        "citations": [
+          "t001"
+        ],
+        "formula": null,
+        "inputs": []
+      }
+    ],
+    "validation_errors": [],
+    "action": "answer_with_warning"
+  },
+  {
+    "query": "What was NVDA net income in 2024?",
+    "plan.mode": "lookup_numeric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "audited_facts_prefer_filing"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "claim_type": "fact",
+        "entity": "NVDA",
+        "metric_or_topic": "net_income",
+        "period": "FY2024",
+        "unit": "USD",
+        "value_or_summary": 118254000000.0,
+        "citations": [
+          "t001"
+        ],
+        "formula": null,
+        "inputs": []
+      }
+    ],
+    "validation_errors": [],
+    "action": "answer_with_warning"
+  },
+  {
+    "query": "What is Apple free cash flow in 2024?",
+    "plan.mode": "compute_metric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "derived_metric_requires_filing_inputs"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "claim_type": "fact",
+        "entity": "AAPL",
+        "metric_or_topic": "fcf",
+        "period": "FY2024",
+        "unit": "USD",
+        "value_or_summary": 0.0,
+        "citations": [
+          "t001",
+          "t001"
+        ],
+        "formula": "fcf = cfo - capex",
+        "inputs": [
+          {
+            "name": "cfo",
+            "value": 9959000000.0,
+            "unit": "USD",
+            "citation": "t001"
+          },
+          {
+            "name": "capex",
+            "value": 9959000000.0,
+            "unit": "USD",
+            "citation": "t001"
+          }
+        ]
+      }
+    ],
+    "validation_errors": [],
+    "action": "answer_with_warning"
+  },
+  {
+    "query": "What is Apple gross margin in 2024?",
+    "plan.mode": "compute_metric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "derived_metric_requires_filing_inputs"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "claim_type": "ratio",
+        "entity": "AAPL",
+        "metric_or_topic": "gross_margin",
+        "period": "FY2024",
+        "unit": "RATIO",
+        "value_or_summary": 0.3024128274962599,
+        "citations": [
+          "t001",
+          "t001"
+        ],
+        "formula": "gross_margin = gross_profit / revenue",
+        "inputs": [
+          {
+            "name": "gross_profit",
+            "value": 118254000000.0,
+            "unit": "USD",
+            "citation": "t001"
+          },
+          {
+            "name": "revenue",
+            "value": 391035000000.0,
+            "unit": "USD",
+            "citation": "t001"
+          }
+        ]
+      }
+    ],
+    "validation_errors": [],
+    "action": "answer_with_warning"
+  },
+  {
+    "query": "Compare AAPL and MSFT revenue growth in 2024.",
+    "plan.mode": "comparative_analysis",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": []
+    },
+    "verification.status": "clarify",
+    "verification.confidence": 0.1,
+    "verification.reason_codes": [
+      "missing_slot:comparative_entities"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null,
+    "action": "clarify"
+  },
+  {
+    "query": "What risks does Nvidia mention in FY2024?",
+    "plan.mode": "risk_analysis",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": true,
+      "market_data": false,
+      "reasons": [
+        "risk_prefers_item1a",
+        "transcript_as_supplement"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "required_source_missing:transcript",
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "item1a_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "claim_type": "summary",
+        "entity": "NVDA",
+        "metric_or_topic": "risk",
+        "period": "FY2024",
+        "unit": null,
+        "value_or_summary": "Stub claim",
+        "citations": [
+          "c001"
+        ],
+        "formula": null,
+        "inputs": []
+      }
+    ],
+    "validation_errors": [
+      "bad_keys: expected=['claims', 'confidence', 'final_answer', 'inferences', 'provenance', 'risks', 'tables_used'] got=['claims', 'confidence', 'final_answer', 'inferences', 'provenance', 'tables_used']"
+    ],
+    "action": "abstain"
+  },
+  {
+    "query": "What did management say about AI demand?",
+    "plan.mode": "lookup_text_management",
+    "plan.retrieval_plan.source_route": {
+      "filing": false,
+      "news": false,
+      "transcript": true,
+      "market_data": false,
+      "reasons": [
+        "management_commentary_requires_transcript"
+      ]
+    },
+    "verification.status": "abstain",
+    "verification.confidence": 0.15,
+    "verification.reason_codes": [
+      "required_source_missing:transcript"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null,
+    "action": "abstain"
+  },
+  {
+    "query": "What is the latest news on Tesla in China?",
+    "plan.mode": "lookup_text_news",
+    "plan.retrieval_plan.source_route": {
+      "filing": false,
+      "news": true,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "latest_query_requires_news"
+      ]
+    },
+    "verification.status": "abstain",
+    "verification.confidence": 0.15,
+    "verification.reason_codes": [
+      "required_source_missing:news"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null,
+    "action": "abstain"
+  },
+  {
+    "query": "What is Apple's EV/EBITDA?",
+    "plan.mode": "relative_valuation",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": true,
+      "reasons": [
+        "relative_valuation_requires_market_data",
+        "filing_denominator_required"
+      ]
+    },
+    "verification.status": "clarify",
+    "verification.confidence": 0.1,
+    "verification.reason_codes": [
+      "missing_slot:fiscal_year"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null,
+    "action": "clarify"
+  },
+  {
+    "query": "Do a SWOT for Apple.",
+    "plan.mode": "mba_framework",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": true,
+      "transcript": true,
+      "market_data": false,
+      "reasons": [
+        "framework_can_use_multi_source_evidence"
+      ]
+    },
+    "verification.status": "abstain",
+    "verification.confidence": 0.2,
+    "verification.reason_codes": [
+      "insufficient_source_diversity"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null,
+    "action": "abstain"
+  }
+]

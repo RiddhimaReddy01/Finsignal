@@ -1,0 +1,499 @@
+{
+  "summary": {
+    "total_queries": 50,
+    "total_elapsed_s": 58.7,
+    "actions": {
+      "answer": 10,
+      "clarify": 10,
+      "abstain": 7,
+      "exception": 23
+    },
+    "modes": {
+      "lookup_numeric": 13,
+      "risk_analysis": 2,
+      "compute_metric": 5,
+      "relative_valuation": 5,
+      "valuation": 2
+    },
+    "exceptions": 23
+  },
+  "details": [
+    {
+      "idx": 1,
+      "question": "What was AAPL revenue in 2024?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 256
+    },
+    {
+      "idx": 2,
+      "question": "What was META net income in 2024?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 149
+    },
+    {
+      "idx": 3,
+      "question": "What was NVDA operating income in 2025?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 198
+    },
+    {
+      "idx": 4,
+      "question": "What was TSLA gross profit in 2024?",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "lookup_numeric",
+      "reason": "Table evidence is missing; cannot verify numeric answers.",
+      "validation_errors": null,
+      "elapsed_ms": 36
+    },
+    {
+      "idx": 5,
+      "question": "What was GOOGL capex in 2025?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 168
+    },
+    {
+      "idx": 6,
+      "question": "What was AAPL EPS in 2024?",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "lookup_numeric",
+      "reason": "deterministic_numeric_failed",
+      "validation_errors": null,
+      "elapsed_ms": 91
+    },
+    {
+      "idx": 7,
+      "question": "What was META cash provided by operating activities in 2024?",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "lookup_numeric",
+      "reason": "Table evidence is missing; cannot verify numeric answers.",
+      "validation_errors": null,
+      "elapsed_ms": 40
+    },
+    {
+      "idx": 8,
+      "question": "What was NVDA revenue in 2024?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 90
+    },
+    {
+      "idx": 9,
+      "question": "What was TSLA net income in 2025?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 201
+    },
+    {
+      "idx": 10,
+      "question": "What was GOOGL operating income in 2024?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "lookup_numeric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 80
+    },
+    {
+      "idx": 11,
+      "question": "What are the key risk factors for AAPL in 2024?",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "Gemini rate-limited across fallback models: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash-lite\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash-lite\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash-lite\nPlease retry in 49.272332152s. [links {\n  description: \"Learn more about Gemini API quotas\"\n  url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n}\n, violations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.0-flash-lite\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.0-flash-lite\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerMinute-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.0-flash-lite\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\n, retry_delay {\n  seconds: 49\n}\n]",
+      "elapsed_ms": 23865
+    },
+    {
+      "idx": 12,
+      "question": "What are the main risk factors for META in 2025?",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "Gemini rate-limited across fallback models: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash-lite\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash-lite\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash-lite\nPlease retry in 26.886744592s. [links {\n  description: \"Learn more about Gemini API quotas\"\n  url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n}\n, violations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerMinute-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.0-flash-lite\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.0-flash-lite\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.0-flash-lite\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\n, retry_delay {\n  seconds: 26\n}\n]",
+      "elapsed_ms": 22349
+    },
+    {
+      "idx": 13,
+      "question": "What uncertainty does NVDA mention in Item 1A for 2024?",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 168
+    },
+    {
+      "idx": 14,
+      "question": "Summarize TSLA risk exposures in FY2025.",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "risk_analysis",
+      "reason": "Insufficient Item 1A evidence for risk analysis.",
+      "validation_errors": null,
+      "elapsed_ms": 1966
+    },
+    {
+      "idx": 15,
+      "question": "What competitive risks does GOOGL disclose in 2024?",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 196
+    },
+    {
+      "idx": 16,
+      "question": "Explain why AAPL revenue changed in 2024.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 269
+    },
+    {
+      "idx": 17,
+      "question": "Explain the business model of META based on the filing.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 138
+    },
+    {
+      "idx": 18,
+      "question": "Why did NVDA margins improve in 2025?",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 102
+    },
+    {
+      "idx": 19,
+      "question": "Explain TSLA management discussion for 2024.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 159
+    },
+    {
+      "idx": 20,
+      "question": "What is the rationale for GOOGL profitability changes in 2025?",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 125
+    },
+    {
+      "idx": 21,
+      "question": "Compare AAPL and META revenue in 2024.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 1044
+    },
+    {
+      "idx": 22,
+      "question": "Compare NVDA vs TSLA gross margin in 2025.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 291
+    },
+    {
+      "idx": 23,
+      "question": "Compare GOOGL and AAPL risk factors in 2024.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 3305
+    },
+    {
+      "idx": 24,
+      "question": "AAPL vs META operating income 2025 comparison.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 313
+    },
+    {
+      "idx": 25,
+      "question": "Compare TSLA and GOOGL cash flow trends.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 266
+    },
+    {
+      "idx": 26,
+      "question": "What is AAPL free cash flow in 2024?",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "compute_metric",
+      "reason": "deterministic_compute_failed",
+      "validation_errors": null,
+      "elapsed_ms": 99
+    },
+    {
+      "idx": 27,
+      "question": "Compute META operating margin in 2025.",
+      "status": "ok",
+      "action": "answer",
+      "mode": "compute_metric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 78
+    },
+    {
+      "idx": 28,
+      "question": "Compute NVDA gross margin in 2024.",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "compute_metric",
+      "reason": "deterministic_compute_failed",
+      "validation_errors": null,
+      "elapsed_ms": 93
+    },
+    {
+      "idx": 29,
+      "question": "Calculate TSLA yoy revenue growth for 2025.",
+      "status": "ok",
+      "action": "answer",
+      "mode": "compute_metric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 83
+    },
+    {
+      "idx": 30,
+      "question": "What is GOOGL operating margin in 2024?",
+      "status": "ok",
+      "action": "answer",
+      "mode": "compute_metric",
+      "reason": null,
+      "validation_errors": [],
+      "elapsed_ms": 85
+    },
+    {
+      "idx": 31,
+      "question": "Estimate AAPL valuation for FY2024.",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "relative_valuation",
+      "reason": "Relative valuation requires market inputs (price or market cap).",
+      "validation_errors": null,
+      "elapsed_ms": 42
+    },
+    {
+      "idx": 32,
+      "question": "Estimate META intrinsic value for FY2025.",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "valuation",
+      "reason": "Table evidence is missing; cannot verify numeric answers.",
+      "validation_errors": null,
+      "elapsed_ms": 39
+    },
+    {
+      "idx": 33,
+      "question": "What is NVDA DCF valuation in 2025?",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "valuation",
+      "reason": "Table evidence is missing; cannot verify numeric answers.",
+      "validation_errors": null,
+      "elapsed_ms": 42
+    },
+    {
+      "idx": 34,
+      "question": "Provide relative valuation for TSLA in 2024.",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "relative_valuation",
+      "reason": "Relative valuation requires market inputs (price or market cap).",
+      "validation_errors": null,
+      "elapsed_ms": 40
+    },
+    {
+      "idx": 35,
+      "question": "What is GOOGL valuation multiple in 2025?",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "relative_valuation",
+      "reason": "Relative valuation requires market inputs (price or market cap).",
+      "validation_errors": null,
+      "elapsed_ms": 42
+    },
+    {
+      "idx": 36,
+      "question": "Estimate AAPL valuation for FY2024 with WACC 10% and terminal growth 3%.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 215
+    },
+    {
+      "idx": 37,
+      "question": "Estimate META valuation for FY2025 with WACC 9% and terminal growth 2.5%.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 160
+    },
+    {
+      "idx": 38,
+      "question": "Give NVDA DCF with discount rate 11% and terminal growth 3%.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 750
+    },
+    {
+      "idx": 39,
+      "question": "Run comps valuation for TSLA using EV/EBITDA in 2024.",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "relative_valuation",
+      "reason": "Relative valuation requires market inputs (price or market cap).",
+      "validation_errors": null,
+      "elapsed_ms": 68
+    },
+    {
+      "idx": 40,
+      "question": "Relative valuation of GOOGL versus peers in 2025.",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 94
+    },
+    {
+      "idx": 41,
+      "question": "",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "question must be a non-empty string",
+      "elapsed_ms": 0
+    },
+    {
+      "idx": 42,
+      "question": "revenue",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "lookup_numeric",
+      "reason": "Missing required slots for mode 'lookup_numeric': ticker, fiscal_year",
+      "validation_errors": null,
+      "elapsed_ms": 59
+    },
+    {
+      "idx": 43,
+      "question": "What was revenue?",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "lookup_numeric",
+      "reason": "Missing required slots for mode 'lookup_numeric': ticker, fiscal_year",
+      "validation_errors": null,
+      "elapsed_ms": 69
+    },
+    {
+      "idx": 44,
+      "question": "Compare valuation of apple vs meta",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 92
+    },
+    {
+      "idx": 45,
+      "question": "change in leadership at AAPL",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 305
+    },
+    {
+      "idx": 46,
+      "question": "risk of change in market for META",
+      "status": "not_ok",
+      "action": "abstain",
+      "mode": "risk_analysis",
+      "reason": "Insufficient Item 1A evidence for risk analysis.",
+      "validation_errors": null,
+      "elapsed_ms": 49
+    },
+    {
+      "idx": 47,
+      "question": "SWOT analysis of NVDA",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 121
+    },
+    {
+      "idx": 48,
+      "question": "Porter 5 forces for TSLA",
+      "status": "exception",
+      "action": "exception",
+      "mode": "unknown",
+      "reason": "404 models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+      "elapsed_ms": 105
+    },
+    {
+      "idx": 49,
+      "question": "What is market cap of GOOGL?",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "relative_valuation",
+      "reason": "Relative valuation requires market inputs (price or market cap).",
+      "validation_errors": null,
+      "elapsed_ms": 38
+    },
+    {
+      "idx": 50,
+      "question": "How much did AAPL earn?",
+      "status": "not_ok",
+      "action": "clarify",
+      "mode": "lookup_numeric",
+      "reason": "Missing required slots for mode 'lookup_numeric': metric",
+      "validation_errors": null,
+      "elapsed_ms": 38
+    }
+  ]
+}

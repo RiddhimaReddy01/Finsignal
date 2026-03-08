@@ -1,0 +1,59 @@
+{
+  "build_timestamp": "2026-03-02T06:07:21.758846+00:00",
+  "embed_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "chunk_size": 1200,
+  "chunk_overlap": 200,
+  "narrative_chunks": 2660,
+  "table_docs": 905,
+  "build_elapsed_s": 99.7,
+  "source_sections": [
+    "AAPL_FY2024_sections.json",
+    "AAPL_FY2025_sections.json",
+    "GOOGL_FY2024_sections.json",
+    "GOOGL_FY2025_sections.json",
+    "META_FY2024_sections.json",
+    "META_FY2025_sections.json",
+    "NVDA_FY2024_sections.json",
+    "NVDA_FY2025_sections.json",
+    "TSLA_FY2024_sections.json",
+    "TSLA_FY2025_sections.json"
+  ],
+  "source_tables": [
+    "AAPL_FY2024_tables.json",
+    "AAPL_FY2025_tables.json",
+    "GOOGL_FY2024_tables.json",
+    "GOOGL_FY2025_tables.json",
+    "META_FY2024_tables.json",
+    "META_FY2025_tables.json",
+    "NVDA_FY2024_tables.json",
+    "NVDA_FY2025_tables.json",
+    "TSLA_FY2024_tables.json",
+    "TSLA_FY2025_tables.json"
+  ],
+  "artifacts": {
+    "bm25.pkl": {
+      "size_bytes": 3102923,
+      "sha256_prefix": "3292be8b428a35e4"
+    },
+    "chunks.parquet": {
+      "size_bytes": 1173888,
+      "sha256_prefix": "990da6f8f9c5c6ec"
+    },
+    "faiss.index": {
+      "size_bytes": 4085805,
+      "sha256_prefix": "bfb83004d1aa5a86"
+    },
+    "table_bm25.pkl": {
+      "size_bytes": 488583,
+      "sha256_prefix": "d51547c55d8192ae"
+    },
+    "table_faiss.index": {
+      "size_bytes": 1390125,
+      "sha256_prefix": "a379b89c0ef15ea6"
+    },
+    "tables.parquet": {
+      "size_bytes": 201014,
+      "sha256_prefix": "290d141908725f25"
+    }
+  }
+}

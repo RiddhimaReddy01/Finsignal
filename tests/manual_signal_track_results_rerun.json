@@ -1,0 +1,328 @@
+[
+  {
+    "query": "What was AAPL revenue in 2024?",
+    "plan.mode": "lookup_numeric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "audited_facts_prefer_filing"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "Extracted from table; scale=million",
+        "citations": [
+          "t001"
+        ]
+      }
+    ],
+    "validation_errors": []
+  },
+  {
+    "query": "What was NVDA net income in 2024?",
+    "plan.mode": "lookup_numeric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "audited_facts_prefer_filing"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "Extracted from table; scale=million",
+        "citations": [
+          "t001"
+        ]
+      }
+    ],
+    "validation_errors": []
+  },
+  {
+    "query": "What is Apple free cash flow in 2024?",
+    "plan.mode": "compute_metric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "derived_metric_requires_filing_inputs"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.78,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "audited_item8_table_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "fcf = cfo - capex",
+        "citations": [
+          "t001",
+          "t001"
+        ]
+      }
+    ],
+    "validation_errors": []
+  },
+  {
+    "query": "What is Apple gross margin in 2024?",
+    "plan.mode": "compute_metric",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "derived_metric_requires_filing_inputs"
+      ]
+    },
+    "verification.status": null,
+    "verification.confidence": null,
+    "verification.reason_codes": null,
+    "verification.source_coverage": null,
+    "result.claims": [],
+    "validation_errors": null
+  },
+  {
+    "query": "Compare AAPL and MSFT revenue growth in 2024.",
+    "plan.mode": "comparative_analysis",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false,
+      "reasons": []
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.68,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "fiscal_year_matched",
+      "filing_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "Stub claim",
+        "citations": [
+          "c001"
+        ]
+      }
+    ],
+    "validation_errors": []
+  },
+  {
+    "query": "What risks does Nvidia mention in FY2024?",
+    "plan.mode": "risk_analysis",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": true,
+      "market_data": false,
+      "reasons": [
+        "risk_prefers_item1a",
+        "transcript_as_supplement"
+      ]
+    },
+    "verification.status": "clarify",
+    "verification.confidence": 0.1,
+    "verification.reason_codes": [
+      "missing_slot:fiscal_year"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null
+  },
+  {
+    "query": "What did management say about AI demand?",
+    "plan.mode": "lookup_text",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": true,
+      "market_data": false,
+      "reasons": [
+        "management_commentary_requires_transcript"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.55,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "year_not_required_or_unspecified",
+      "filing_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "Stub claim",
+        "citations": [
+          "c001"
+        ]
+      }
+    ],
+    "validation_errors": []
+  },
+  {
+    "query": "What is the latest news on Tesla in China?",
+    "plan.mode": "lookup_text",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": true,
+      "transcript": false,
+      "market_data": false,
+      "reasons": [
+        "latest_query_requires_news"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.55,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "year_not_required_or_unspecified",
+      "filing_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "Stub claim",
+        "citations": [
+          "c001"
+        ]
+      }
+    ],
+    "validation_errors": []
+  },
+  {
+    "query": "What is Apple's EV/EBITDA?",
+    "plan.mode": "relative_valuation",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": true,
+      "reasons": [
+        "relative_valuation_requires_market_data",
+        "filing_denominator_required"
+      ]
+    },
+    "verification.status": "clarify",
+    "verification.confidence": 0.1,
+    "verification.reason_codes": [
+      "missing_slot:fiscal_year"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [],
+    "validation_errors": null
+  },
+  {
+    "query": "Do a SWOT for Apple.",
+    "plan.mode": "mba_framework",
+    "plan.retrieval_plan.source_route": {
+      "filing": true,
+      "news": true,
+      "transcript": true,
+      "market_data": false,
+      "reasons": [
+        "framework_can_use_multi_source_evidence"
+      ]
+    },
+    "verification.status": "answer_with_warning",
+    "verification.confidence": 0.55,
+    "verification.reason_codes": [
+      "source_sufficiency_met",
+      "ticker_matched",
+      "year_not_required_or_unspecified",
+      "filing_present"
+    ],
+    "verification.source_coverage": {
+      "filing": true,
+      "news": false,
+      "transcript": false,
+      "market_data": false
+    },
+    "result.claims": [
+      {
+        "text": "Stub claim",
+        "citations": [
+          "c001"
+        ]
+      }
+    ],
+    "validation_errors": [
+      "bad_keys: expected=['claims', 'confidence', 'final_answer', 'framework', 'inferences', 'provenance', 'tables_used'] got=['claims', 'confidence', 'final_answer', 'inferences', 'provenance', 'tables_used']"
+    ]
+  }
+]
