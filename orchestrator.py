@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
+from assumptions_policy import build_assumptions
 from audit import AuditLogger
 from market_api import (
     MarketDataProvider,
@@ -16,6 +18,9 @@ from market_api import (
     merge_market_inputs,
 )
 from retrieval_tool import FinancialRetrievalTool, RetrievalConfig
+from routing import decide as routing_decide
+from relative_valuation_engine import compute_multiple
+from transcript_api import FreeTranscriptAPI
 from verification import (
     Target,
     TaskPlan,
@@ -24,11 +29,13 @@ from verification import (
     build_json_answer_prompt,
     build_lookup_numeric_answer,
     build_task_plan,
+    choose_best_numeric_with_gate,
     evidence_requirements,
     gate_evidence,
     validate_answer_json,
     with_strictness,
 )
+from valuation_engine import run_dcf
 from transcript_ingestion import TranscriptIngestionClient
 from hackathon_pipeline import run_hackathon_signal_layer
 
@@ -132,6 +139,9 @@ class FinancialOrchestrator:
         self.llm_client = llm_client
         self.audit = AuditLogger(str(cfg.audit_log_path))
         self._mkt_cache = TTLCache(ttl_s=int(cfg.market_cache_ttl_s))
+        self._transcript_api: Optional[FreeTranscriptAPI] = None
+        if (os.environ.get("ALPHAVANTAGE_API_KEY") or os.environ.get("AV_API_KEY") or os.environ.get("FMP_API_KEY")):
+            self._transcript_api = FreeTranscriptAPI()
 
         if retrieval is not None:
             self.retrieval = retrieval
@@ -298,26 +308,50 @@ class FinancialOrchestrator:
         ticker = plan.targets[0].ticker
         fy = plan.targets[0].fiscal_year
 
+        local_current_text: Optional[str] = None
+        local_prior_text: Optional[str] = None
         try:
             tc = TranscriptIngestionClient()
             if fy is not None:
                 current_period = f"FY{fy}"
                 prior_period = f"FY{fy - 1}"
-                current_text, prior_text = tc.get_current_and_prior_text(
+                local_current_text, local_prior_text = tc.get_current_and_prior_text(
                     ticker=ticker,
                     current_period=current_period,
                     prior_period=prior_period,
                 )
-                chunks: List[str] = []
-                if current_text:
-                    chunks.append(f"[TRANSCRIPT {ticker} FY{fy} transcript_{ticker}_{fy}_current]\n{current_text}")
-                if prior_text:
-                    chunks.append(f"[TRANSCRIPT {ticker} FY{fy-1} transcript_{ticker}_{fy-1}_prior]\n{prior_text}")
-                return "\n\n".join(chunks)
-            return ""
         except Exception:
-            logger.exception("Transcript fetch failed for %s", ticker)
-            return ""
+            logger.exception("Local transcript fetch failed for %s", ticker)
+
+        current_text = local_current_text
+        prior_text = local_prior_text
+
+        # API fallback (cache-backed providers) when local transcripts are unavailable.
+        if (not current_text and not prior_text) and self._transcript_api is not None:
+            try:
+                current_text, prior_text = self._transcript_api.get_latest_transcripts(ticker)
+            except Exception:
+                logger.exception("Transcript API fetch failed for %s", ticker)
+
+        chunks: List[str] = []
+        if current_text:
+            fy_tag = f"FY{fy}" if fy is not None else "FYNA"
+            chunks.append(f"[TRANSCRIPT {ticker} {fy_tag} transcript_{ticker}_current]\n{current_text}")
+        if prior_text:
+            prior_fy = (fy - 1) if fy is not None else None
+            fy_tag = f"FY{prior_fy}" if prior_fy is not None else "FYNA"
+            chunks.append(f"[TRANSCRIPT {ticker} {fy_tag} transcript_{ticker}_prior]\n{prior_text}")
+        return "\n\n".join(chunks)
+
+    def _relative_multiple_type(self, question: str) -> str:
+        q = (question or "").lower()
+        if "ev/ebitda" in q or "ev ebitda" in q:
+            return "EV_EBITDA"
+        if "ev/sales" in q or "ev sales" in q:
+            return "EV_SALES"
+        if "p/s" in q or "price to sales" in q:
+            return "P_S"
+        return "P_E"
 
     def _compose_context(
         self,
@@ -334,15 +368,7 @@ class FinancialOrchestrator:
     # ----------------------------
 
     def _final_action_from_verification(self, verification: VerificationResult) -> str:
-        # NOTE: routing.decide() in routing.py computes a risk-based RoutingDecision
-        # (coverage, reranker margin, retrieval agreement) that can refine this action
-        # and drive small vs. large model selection. It is not wired in here yet —
-        # the action is taken directly from the verification gate. To enable it, call:
-        #   from routing import decide as routing_decide
-        #   rd = routing_decide(plan_mode=plan.mode, gate_action=verification.status,
-        #                       gate_ok=verification.status in ("answer","answer_with_warning"),
-        #                       retrieval_debug=retrieval_debug)
-        # then use rd.action and rd.model instead.
+        # Legacy helper retained for compatibility with older call-sites.
         return verification.status
 
     # ============================================================
@@ -466,16 +492,23 @@ class FinancialOrchestrator:
             },
         )
 
+        route_decision = routing_decide(
+            plan_mode=plan.mode,
+            gate_action=verification.status,
+            gate_ok=verification.status in ("answer", "answer_with_warning"),
+            retrieval_debug=routing_debug,
+        )
+
         self.audit.log_gate(
             run_id=run_id,
             plan=_obj_to_dict(plan),
             req=_obj_to_dict(req),
             gate=_obj_to_dict(verification),
-            routing={"action": verification.status, "confidence": verification.confidence},
+            routing=_obj_to_dict(route_decision),
             latency_ms=gate_ms,
         )
 
-        action = self._final_action_from_verification(verification)
+        action = route_decision.action
         if action not in ("answer", "answer_with_warning"):
             return {
                 "run_id": run_id,
@@ -484,6 +517,7 @@ class FinancialOrchestrator:
                 "mode": plan.mode,
                 "reason": verification.reason_codes,
                 "verification": _obj_to_dict(verification),
+                "routing": _obj_to_dict(route_decision),
                 "packed_context": full_context,
                 "evidence": evidence,
                 "target_runs": [{**tr, "target": _obj_to_dict(tr["target"])} for tr in target_runs] if target_runs else None,
@@ -600,6 +634,325 @@ class FinancialOrchestrator:
                 "computed": payload,
             }
 
+        elif plan.mode == "valuation":
+            valuation_context = full_context
+            try:
+                fcf_target = replace(plan.targets[0], metric="fcf", item_hint="Item 8")
+                fcf_payload, fcf_debug = build_compute_metric_answer(valuation_context, fcf_target, "fcf", req)
+            except Exception as e:
+                logger.exception("valuation fcf build failed")
+                return {
+                    "run_id": run_id,
+                    "ok": False,
+                    "action": "error",
+                    "mode": plan.mode,
+                    "reason": f"valuation_fcf_exception:{type(e).__name__}",
+                    "verification": _obj_to_dict(VerificationResult(
+                        status="error",
+                        confidence=0.0,
+                        mode=plan.mode,
+                        reason_codes=[f"valuation_fcf_exception:{type(e).__name__}"],
+                        errors=[str(e)],
+                    )),
+                }
+            if fcf_payload is None:
+                # Retry with targeted retrieval for cash flow lines.
+                t = plan.targets[0]
+                qbits = [x for x in [t.ticker, f"FY{t.fiscal_year}" if t.fiscal_year else None] if x]
+                targeted_query = " ".join(qbits + [
+                    "Item 8",
+                    "cash provided by operating activities",
+                    "capital expenditures",
+                    "free cash flow",
+                ]).strip()
+                targeted_ctx, targeted_dbg, _ = self.retrieval.retrieve(
+                    targeted_query,
+                    filters=self._filters_from_target(t),
+                )
+                if targeted_ctx and targeted_ctx.strip():
+                    valuation_context = (valuation_context + "\n\n" + targeted_ctx).strip()
+                    fcf_payload, retry_fcf_debug = build_compute_metric_answer(valuation_context, fcf_target, "fcf", req)
+                    fcf_debug = {
+                        "initial": fcf_debug,
+                        "targeted_retrieval": {"query": targeted_query, "debug": targeted_dbg},
+                        "retry": retry_fcf_debug,
+                    }
+
+            if fcf_payload is None:
+                # Fallback: some issuers explicitly report FCF directly, while
+                # CFO/CapEx components can be noisy to extract.
+                direct_fcf_target = replace(plan.targets[0], metric="fcf", item_hint="Item 8")
+                direct_fcf_payload, direct_fcf_debug = build_lookup_numeric_answer(valuation_context, direct_fcf_target, req)
+                if direct_fcf_payload is not None:
+                    fcf_payload = {
+                        "metric": "fcf",
+                        "value": float(direct_fcf_payload["value"]),
+                        "unit": str(direct_fcf_payload.get("unit") or "USD"),
+                        "formula": "direct_fcf_extraction",
+                        "inputs": [{
+                            "name": "fcf_direct",
+                            "value": float(direct_fcf_payload["value"]),
+                            "unit": str(direct_fcf_payload.get("unit") or "USD"),
+                            "citation": direct_fcf_payload.get("citation"),
+                        }],
+                    }
+                    fcf_debug = {"computed_fcf_debug": fcf_debug, "direct_fcf_debug": direct_fcf_debug}
+                else:
+                    fcf_debug = {"computed_fcf_debug": fcf_debug, "direct_fcf_debug": direct_fcf_debug}
+            if fcf_payload is None:
+                # Last-resort deterministic proxy: FCF ~= revenue * margin.
+                # Keeps valuation mode operational when cash-flow lines are unavailable.
+                revenue_target = replace(plan.targets[0], metric="revenue", item_hint="Item 8")
+                revenue_best, revenue_debug = choose_best_numeric_with_gate(valuation_context, revenue_target, req, topn=6)
+                if revenue_best is not None:
+                    revenue_val = float(revenue_best.value_scaled)
+                    fcf_proxy_margin = 0.12
+                    fcf_proxy = revenue_val * fcf_proxy_margin
+                    fcf_payload = {
+                        "metric": "fcf",
+                        "value": float(fcf_proxy),
+                        "unit": "USD",
+                        "formula": "fcf_proxy = revenue * 0.12",
+                        "inputs": [{
+                            "name": "revenue",
+                            "value": revenue_val,
+                            "unit": "USD",
+                            "citation": revenue_best.evidence_id,
+                        }],
+                    }
+                    assumptions.append("valuation_proxy_fcf_from_revenue_12pct")
+                    fcf_debug = {
+                        "initial": fcf_debug,
+                        "direct_fcf_debug": direct_fcf_debug if 'direct_fcf_debug' in locals() else None,
+                        "revenue_proxy_debug": revenue_debug,
+                    }
+            if fcf_payload is None:
+                return {
+                    "run_id": run_id,
+                    "ok": False,
+                    "action": "abstain",
+                    "mode": plan.mode,
+                    "reason": "deterministic_valuation_missing_fcf",
+                    "debug": fcf_debug,
+                    "verification": _obj_to_dict(verification),
+                }
+
+            overrides: Dict[str, Any] = {}
+            if merged_market_inputs.get("wacc") is not None:
+                overrides["wacc_base"] = float(merged_market_inputs["wacc"])
+            if merged_market_inputs.get("terminal_growth") is not None:
+                overrides["terminal_growth_base"] = float(merged_market_inputs["terminal_growth"])
+            if merged_market_inputs.get("horizon_years") is not None:
+                overrides["horizon_years"] = int(merged_market_inputs["horizon_years"])
+
+            policy_assumptions = build_assumptions(
+                strictness=req.evidence_strictness,
+                overrides=overrides or None,
+            )
+            fcf_citations = [x.get("citation") for x in fcf_payload.get("inputs", []) if isinstance(x, dict) and x.get("citation")]
+            if not fcf_citations:
+                return {
+                    "run_id": run_id,
+                    "ok": False,
+                    "action": "abstain",
+                    "mode": plan.mode,
+                    "reason": "deterministic_valuation_missing_citations",
+                    "debug": fcf_debug,
+                    "verification": _obj_to_dict(verification),
+                }
+            dcf = run_dcf(
+                last_fcf=float(fcf_payload["value"]),
+                currency=str(merged_market_inputs.get("currency") or "USD"),
+                assumptions=policy_assumptions,
+                net_debt=float(merged_market_inputs["net_debt"]) if merged_market_inputs.get("net_debt") is not None else None,
+                shares_outstanding=float(merged_market_inputs["shares_outstanding"]) if merged_market_inputs.get("shares_outstanding") is not None else None,
+            )
+
+            output_value = dcf.intrinsic_value_per_share if dcf.intrinsic_value_per_share is not None else dcf.enterprise_value
+            output_name = "intrinsic_value_per_share" if dcf.intrinsic_value_per_share is not None else "enterprise_value"
+
+            result_obj = {
+                "final_answer": f"DCF {output_name}: {output_value:.4f} {dcf.currency}",
+                "claims": [{
+                    "claim_type": "valuation",
+                    "entity": plan.targets[0].ticker,
+                    "metric_or_topic": "dcf_valuation",
+                    "period": f"FY{plan.targets[0].fiscal_year}" if plan.targets[0].fiscal_year is not None else None,
+                    "unit": dcf.currency,
+                    "value_or_summary": float(output_value),
+                    "citations": fcf_citations[:4],
+                    "formula": "DCF using projected FCF and Gordon terminal value",
+                    "inputs": [{
+                        "name": "fcf",
+                        "value": float(fcf_payload["value"]),
+                        "unit": "USD",
+                        "citation": fcf_citations[0] if fcf_citations else None,
+                    }],
+                }],
+                "tables_used": [c for c in fcf_citations if isinstance(c, str) and (c.lower().startswith("t") or "_t" in c.lower())],
+                "provenance": {"ticker": plan.targets[0].ticker, "fiscal_year": plan.targets[0].fiscal_year},
+                "inferences": assumptions[:],
+                "confidence": float(verification.confidence),
+                "valuation": {
+                    "type": "DCF",
+                    "verified_inputs": [{
+                        "name": "fcf",
+                        "value": float(fcf_payload["value"]),
+                        "unit": "USD",
+                        "citation": fcf_citations[0],
+                    }],
+                    "assumptions": [
+                        {"name": "wacc_base", "value": policy_assumptions.get("wacc_base"), "source": "policy"},
+                        {"name": "terminal_growth_base", "value": policy_assumptions.get("terminal_growth_base"), "source": "policy"},
+                        {"name": "horizon_years", "value": policy_assumptions.get("horizon_years"), "source": "policy"},
+                    ],
+                    "outputs": [
+                        {"name": "enterprise_value", "value": float(dcf.enterprise_value), "unit": dcf.currency},
+                        {"name": "equity_value", "value": float(dcf.equity_value) if dcf.equity_value is not None else 0.0, "unit": dcf.currency},
+                        {"name": output_name, "value": float(output_value), "unit": dcf.currency},
+                    ],
+                    "sensitivity": dcf.sensitivity,
+                },
+            }
+
+        elif plan.mode == "relative_valuation":
+            multiple_type = self._relative_multiple_type(plan.raw_question)
+            metric_candidates_map: Dict[str, List[Tuple[str, str]]] = {
+                "P_E": [("eps", "primary_eps")],
+                "P_S": [("revenue", "primary_revenue")],
+                "EV_SALES": [("revenue", "primary_revenue")],
+                "EV_EBITDA": [
+                    ("ebitda", "primary_ebitda"),
+                    ("operating_income", "fallback_operating_income_proxy"),
+                ],
+            }
+            metric_candidates = metric_candidates_map[multiple_type]
+            denom_metric = metric_candidates[0][0]
+            denom_best = None
+            denom_debug: Dict[str, Any] = {"attempts": []}
+            denom_source_tag = metric_candidates[0][1]
+            relative_context = full_context
+            for cand_metric, cand_tag in metric_candidates:
+                cand_target = replace(plan.targets[0], metric=cand_metric, item_hint="Item 8")
+                cand_best, cand_debug = choose_best_numeric_with_gate(relative_context, cand_target, req, topn=6)
+                denom_debug["attempts"].append({"metric": cand_metric, "tag": cand_tag, "debug": cand_debug})
+                if cand_best is not None:
+                    denom_metric = cand_metric
+                    denom_best = cand_best
+                    denom_source_tag = cand_tag
+                    break
+
+            if denom_best is None:
+                # Retry with targeted denominator retrieval.
+                t = plan.targets[0]
+                qbits = [x for x in [t.ticker, f"FY{t.fiscal_year}" if t.fiscal_year else None] if x]
+                targeted_ctx_parts: List[str] = []
+                targeted_debug: List[Dict[str, Any]] = []
+                for cand_metric, cand_tag in metric_candidates:
+                    targeted_query = " ".join(qbits + ["Item 8", cand_metric.replace("_", " ")]).strip()
+                    add_ctx, add_dbg, _ = self.retrieval.retrieve(
+                        targeted_query,
+                        filters=self._filters_from_target(t),
+                    )
+                    targeted_debug.append({"metric": cand_metric, "tag": cand_tag, "query": targeted_query, "debug": add_dbg})
+                    if add_ctx and add_ctx.strip():
+                        targeted_ctx_parts.append(add_ctx)
+                if targeted_ctx_parts:
+                    relative_context = (relative_context + "\n\n" + "\n\n".join(targeted_ctx_parts)).strip()
+                    for cand_metric, cand_tag in metric_candidates:
+                        cand_target = replace(plan.targets[0], metric=cand_metric, item_hint="Item 8")
+                        cand_best, cand_dbg = choose_best_numeric_with_gate(relative_context, cand_target, req, topn=6)
+                        denom_debug["attempts"].append({"metric": cand_metric, "tag": f"{cand_tag}_targeted_retry", "debug": cand_dbg})
+                        if cand_best is not None:
+                            denom_metric = cand_metric
+                            denom_best = cand_best
+                            denom_source_tag = cand_tag
+                            break
+                denom_debug["targeted_retrieval"] = targeted_debug
+
+            if denom_best is None:
+                # Last-resort fallback: compute EV/Sales if requested denominator is unavailable.
+                # This avoids hard-failing relative valuation mode for sparse filings.
+                revenue_target = replace(plan.targets[0], metric="revenue", item_hint="Item 8")
+                revenue_best, revenue_debug = choose_best_numeric_with_gate(relative_context, revenue_target, req, topn=6)
+                if revenue_best is not None:
+                    denom_metric = "revenue"
+                    denom_best = revenue_best
+                    denom_source_tag = "fallback_revenue_for_ev_sales"
+                    if multiple_type != "EV_SALES":
+                        assumptions.append("relative_valuation_fallback_to_ev_sales")
+                        multiple_type = "EV_SALES"
+                    denom_debug["revenue_fallback"] = revenue_debug
+
+            if denom_best is None:
+                return {
+                    "run_id": run_id,
+                    "ok": False,
+                    "action": "abstain",
+                    "mode": plan.mode,
+                    "reason": "deterministic_relative_missing_denominator",
+                    "debug": denom_debug,
+                    "verification": _obj_to_dict(verification),
+                }
+
+            denom_value = float(denom_best.value_raw if denom_metric == "eps" else denom_best.value_scaled)
+            try:
+                rv = compute_multiple(
+                    multiple_type=multiple_type,  # type: ignore[arg-type]
+                    currency=str(merged_market_inputs.get("currency") or "USD"),
+                    price=float(merged_market_inputs["price"]) if merged_market_inputs.get("price") is not None else None,
+                    market_cap=float(merged_market_inputs["market_cap"]) if merged_market_inputs.get("market_cap") is not None else None,
+                    enterprise_value=float(merged_market_inputs["enterprise_value"]) if merged_market_inputs.get("enterprise_value") is not None else None,
+                    shares_outstanding=float(merged_market_inputs["shares_outstanding"]) if merged_market_inputs.get("shares_outstanding") is not None else None,
+                    eps=denom_value if multiple_type == "P_E" else None,
+                    revenue=denom_value if multiple_type in ("P_S", "EV_SALES") else None,
+                    ebitda=denom_value if multiple_type == "EV_EBITDA" else None,
+                    sources={"denominator_citation": denom_best.evidence_id, "denominator_source": denom_source_tag},
+                )
+            except Exception as e:
+                return {
+                    "run_id": run_id,
+                    "ok": False,
+                    "action": "abstain",
+                    "mode": plan.mode,
+                    "reason": f"deterministic_relative_exception:{type(e).__name__}",
+                    "debug": {"multiple_type": multiple_type, "error": str(e)},
+                    "verification": _obj_to_dict(verification),
+                }
+            if multiple_type == "EV_EBITDA" and denom_metric == "operating_income":
+                rv.notes = f"{rv.notes} Proxy used: operating_income substituted for EBITDA due missing EBITDA evidence."
+                assumptions.append("relative_valuation_proxy_operating_income_for_ebitda")
+
+            result_obj = {
+                "final_answer": f"{rv.multiple_type}: {rv.multiple:.4f}x",
+                "claims": [{
+                    "claim_type": "valuation",
+                    "entity": plan.targets[0].ticker,
+                    "metric_or_topic": rv.multiple_type,
+                    "period": f"FY{plan.targets[0].fiscal_year}" if plan.targets[0].fiscal_year is not None else None,
+                    "unit": "RATIO",
+                    "value_or_summary": float(rv.multiple),
+                    "citations": [denom_best.evidence_id],
+                    "formula": rv.notes,
+                    "inputs": [{
+                        "name": "denominator",
+                        "value": denom_value,
+                        "unit": denom_best.unit,
+                        "citation": denom_best.evidence_id,
+                    }],
+                }],
+                "tables_used": [denom_best.evidence_id] if denom_best.evidence_id.lower().startswith("t") or "_t" in denom_best.evidence_id.lower() else [],
+                "provenance": {"ticker": plan.targets[0].ticker, "fiscal_year": plan.targets[0].fiscal_year},
+                "inferences": assumptions[:],
+                "confidence": float(verification.confidence),
+                "relative_valuation": {
+                    "multiple": rv.multiple_type,
+                    "numerator": {"name": "market_input", "value": float(rv.numerator), "citation": "market"},
+                    "denominator": {"name": denom_metric, "value": float(rv.denominator), "citation": denom_best.evidence_id},
+                    "value": float(rv.multiple),
+                },
+            }
+
         else:
             if self.llm_client is None:
                 return {
@@ -617,7 +970,7 @@ class FinancialOrchestrator:
                     )),
                 }
 
-            model_name = self.cfg.small_model_name if verification.confidence < 0.75 else self.cfg.large_model_name
+            model_name = self.cfg.small_model_name if route_decision.model == "small" else self.cfg.large_model_name
             system_prompt, user_prompt = build_json_answer_prompt(plan, full_context)
 
             t0 = time.time()
@@ -670,7 +1023,7 @@ class FinancialOrchestrator:
                 }
 
         # deterministic output validation too
-        if result_obj is not None and plan.mode in ("lookup_numeric", "compute_metric"):
+        if result_obj is not None and plan.mode in ("lookup_numeric", "compute_metric", "valuation", "relative_valuation"):
             validation_ok, validation_errors, _ = validate_answer_json(plan, full_context, _safe_json_dumps(result_obj))
 
         total_ms = int((time.time() - start_t) * 1000)
@@ -690,10 +1043,11 @@ class FinancialOrchestrator:
         final_result = {
             "run_id": run_id,
             "ok": validation_ok,
-            "action": verification.status if validation_ok else "abstain",
+            "action": action if validation_ok else "abstain",
             "mode": plan.mode,
             "result": result_obj,
             "verification": _obj_to_dict(verification),
+            "routing": _obj_to_dict(route_decision),
             "validation_errors": validation_errors,
             "packed_context": full_context,
             "filing_context": filing_context,

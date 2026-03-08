@@ -1,9 +1,11 @@
 # market_api.py
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional, Protocol, Tuple
 
 
@@ -154,6 +156,35 @@ def merge_market_inputs(user_inputs: Optional[Dict[str, Any]], fetched: Optional
     return out
 
 
+_DISK_CACHE_DIR = Path("data/cache/market")
+_DISK_CACHE_TTL_S = 3600  # 1 hour — balances freshness vs. yfinance rate limits
+
+
+def _disk_cache_get(key: str) -> Optional[Dict[str, Any]]:
+    _DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    p = _DISK_CACHE_DIR / f"{key}.json"
+    if not p.exists():
+        return None
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+        if time.time() - float(obj.get("_cached_at", 0)) < _DISK_CACHE_TTL_S:
+            return obj
+    except Exception:
+        pass
+    return None
+
+
+def _disk_cache_set(key: str, data: Dict[str, Any]) -> None:
+    _DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    p = _DISK_CACHE_DIR / f"{key}.json"
+    try:
+        payload = dict(data)
+        payload["_cached_at"] = time.time()
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def fetch_min_market_inputs(
     provider: MarketDataProvider,
     *,
@@ -168,6 +199,13 @@ def fetch_min_market_inputs(
     t = (ticker or "").upper().strip()
     if not t:
         return {}
+
+    # Disk-level cache (1 h TTL) — survives process restarts
+    disk_key = f"market_{t}_{tenor}"
+    disk_hit = _disk_cache_get(disk_key)
+    if disk_hit:
+        disk_hit.pop("_cached_at", None)
+        return disk_hit
 
     cache = cache or TTLCache(ttl_s=300)
 
@@ -207,5 +245,8 @@ def fetch_min_market_inputs(
         out["risk_free_rate"] = float(rf)
     if beta is not None:
         out["beta"] = float(beta)
+
+    if out:
+        _disk_cache_set(disk_key, out)
 
     return out

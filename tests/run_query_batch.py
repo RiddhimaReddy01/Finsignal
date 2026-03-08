@@ -28,6 +28,7 @@ sys.path.insert(0, str(BASE))
 from local_llm import build_local_llm_client, DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL
 from market_api import YahooFinanceMarketDataProvider
 from orchestrator import FinancialOrchestrator, OrchestratorConfig
+from retrieval_tool import FinancialRetrievalTool, RetrievalConfig
 from knowledge_base import TICKERS as KB_TICKERS
 
 logging.basicConfig(
@@ -129,6 +130,19 @@ def build_orchestrator() -> FinancialOrchestrator:
     audit_log = BASE / "logs" / "run_query_batch_audit.jsonl"
     audit_log.parent.mkdir(parents=True, exist_ok=True)
 
+    # Build retrieval tool with reranking OFF to avoid downloading the
+    # cross-encoder from HuggingFace at test time (mirrors conftest.py).
+    retrieval = FinancialRetrievalTool(
+        narrative_chunks_path=idx / "chunks.parquet",
+        narrative_bm25_path=idx / "bm25.pkl",
+        narrative_faiss_path=idx / "faiss.index",
+        table_docs_path=idx / "tables.parquet",
+        table_bm25_path=idx / "table_bm25.pkl",
+        table_faiss_path=idx / "table_faiss.index",
+        companyfacts_dir=BASE / "data" / "xbrl_companyfacts",
+        config=RetrievalConfig(use_rerank=False),
+    )
+
     llm_client = build_local_llm_client(
         primary_model=DEFAULT_PRIMARY_MODEL,
         fallback_model=DEFAULT_FALLBACK_MODEL,
@@ -144,7 +158,7 @@ def build_orchestrator() -> FinancialOrchestrator:
         market_provider=YahooFinanceMarketDataProvider(),
     )
 
-    return FinancialOrchestrator(cfg=cfg, llm_client=llm_client)
+    return FinancialOrchestrator(cfg=cfg, llm_client=llm_client, retrieval=retrieval)
 
 
 # ─────────────────────────────────────────────
@@ -161,6 +175,7 @@ def _run_with_source_route(
     result dict so the logger can display plan.retrieval_plan.source_route.
     We do this by temporarily instrumenting build_task_plan.
     """
+    import orchestrator as _orch
     import verification as _ver
     _orig_build = _ver.build_task_plan
     captured: Dict[str, Any] = {}
@@ -171,11 +186,14 @@ def _run_with_source_route(
         captured["mode"]         = plan.mode
         return plan
 
-    _ver.build_task_plan = _patched_build
+    # Must patch the name inside the orchestrator module (local binding created
+    # by `from verification import build_task_plan`). Patching _ver.build_task_plan
+    # alone has no effect because orchestrator holds its own reference.
+    _orch.build_task_plan = _patched_build
     try:
         result = orchestrator.answer(query, auto_fetch_market=False)
     finally:
-        _ver.build_task_plan = _orig_build
+        _orch.build_task_plan = _orig_build
 
     result["_source_route"] = captured.get("source_route", "unknown")
     return result

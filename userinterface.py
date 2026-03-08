@@ -1,11 +1,24 @@
-import streamlit as st
+"""
+userinterface.py — FinSight Financial Intelligence Terminal
+Professional dark UI: sticky header · central query · animated evidence · signal dashboard
+"""
+from __future__ import annotations
+
 import time
 import os
 import re
+import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import asdict, is_dataclass
+
+import streamlit as st
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENV / IMPORTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _load_dotenv() -> None:
     env_path = Path(__file__).resolve().parent / ".env"
@@ -19,10 +32,12 @@ def _load_dotenv() -> None:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
 
+
 _load_dotenv()
 
 from local_llm import build_local_llm_client, DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL
 from market_api import YahooFinanceMarketDataProvider
+from news_client_adapter import build_optional_news_client
 from orchestrator import FinancialOrchestrator, OrchestratorConfig
 from verification import Mode
 
@@ -34,70 +49,517 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
 ALL_MODES: list[str] = ["auto"] + list(Mode.__args__)  # type: ignore[attr-defined]
 UI_TICKERS: list[str] = sorted({str(t).strip().upper() for t in KB_TICKERS if str(t).strip()})
 UI_FISCAL_YEARS: list[int] = sorted({int(y) for y in KB_TARGET_FYS if isinstance(y, int)})
 
 
-# ---------------------------
-# Styling (Bloomberg-ish)
-# ---------------------------
-TERMINAL_CSS = """
+# ─────────────────────────────────────────────────────────────────────────────
+# DESIGN SYSTEM CSS
+# ─────────────────────────────────────────────────────────────────────────────
+
+DARK_CSS = """
 <style>
-/* Layout + fonts */
-html, body, [class*="css"]  { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-.block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }
-h1, h2, h3 { letter-spacing: 0.3px; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* “Terminal” panels */
-.term-panel {
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: rgba(255,255,255,0.03);
-}
-.term-kpi {
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: rgba(255,255,255,0.03);
-}
-.term-muted { opacity: 0.75; }
-.term-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(255,255,255,0.04);
-  font-size: 12px;
-  margin-right: 6px;
+/* ── TOKENS ───────────────────────────────────────────── */
+:root {
+  --bg-base:       #0d1117;
+  --bg-surface:    #161b22;
+  --bg-elevated:   #21262d;
+  --bg-overlay:    #30363d;
+  --border:        rgba(240,246,252,0.10);
+  --border-sub:    rgba(240,246,252,0.055);
+  --text-1:        #e6edf3;
+  --text-2:        #8b949e;
+  --text-3:        #6e7681;
+  --blue:          #58a6ff;
+  --green:         #3fb950;
+  --amber:         #e3b341;
+  --orange:        #f0883e;
+  --red:           #f85149;
+  --purple:        #bc8cff;
+  --cyan:          #39d3f5;
+  --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 16px; --r-xl: 22px;
+  --shadow-sm: 0 1px 4px rgba(0,0,0,.35);
+  --shadow-md: 0 4px 14px rgba(0,0,0,.45);
+  --shadow-lg: 0 8px 28px rgba(0,0,0,.55);
 }
 
-/* Streamlit tweaks */
-[data-testid="stSidebar"] { border-right: 1px solid rgba(255,255,255,0.10); }
-div[data-testid="stMetricValue"] { font-family: inherit; }
+/* ── BASE ─────────────────────────────────────────────── */
+html, body, [class*="css"] {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  background: var(--bg-base) !important;
+  color: var(--text-1) !important;
+  font-size: 14px;
+}
+.block-container {
+  padding: 0 1.5rem 4rem !important;
+  max-width: 1400px !important;
+}
+h1,h2,h3,h4 { color: var(--text-1) !important; letter-spacing: -0.25px; }
+p, li        { color: var(--text-2); line-height: 1.72; }
+a            { color: var(--blue) !important; }
+strong       { color: var(--text-1) !important; }
+code, pre    { font-family: 'JetBrains Mono', ui-monospace, monospace !important; font-size: 0.83em !important; }
+hr           { border-color: var(--border) !important; }
+
+/* ── SIDEBAR ──────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+  background: var(--bg-surface) !important;
+  border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] * { font-size: 0.84rem !important; }
+
+/* ── STICKY HEADER ────────────────────────────────────── */
+.fin-header {
+  position: sticky; top: 0; z-index: 400;
+  background: rgba(13,17,23,0.94);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border-bottom: 1px solid var(--border);
+  margin: 0 -1.5rem 1.75rem -1.5rem;
+  padding: 0 1.5rem;
+}
+.fin-header-inner {
+  max-width: 1400px; margin: 0 auto;
+  display: flex; align-items: center; height: 52px; gap: 18px;
+}
+.fin-logo {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.05rem; font-weight: 600;
+  color: var(--blue) !important; white-space: nowrap; letter-spacing: -0.3px;
+}
+.fin-logo em { color: var(--text-3); font-style: normal; font-weight: 400; font-size: 0.78em; margin-left: 8px; }
+.fin-hdr-spacer { flex: 1; }
+.fin-hdr-crumb {
+  font-size: 0.78rem; color: var(--text-3);
+  font-family: 'JetBrains Mono', monospace;
+  max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fin-hdr-status { display: flex; align-items: center; gap: 6px; }
+.fin-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.fin-dot-green  { background: var(--green);  box-shadow: 0 0 5px var(--green); }
+.fin-dot-amber  { background: var(--amber);  box-shadow: 0 0 5px var(--amber); }
+.fin-dot-red    { background: var(--red);    box-shadow: 0 0 5px var(--red);   }
+.fin-dot-blue   { background: var(--blue);   box-shadow: 0 0 5px var(--blue);  }
+.fin-hdr-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.fin-status-lbl { font-size: 0.72rem; color: var(--text-3); }
+
+/* ── CARDS ────────────────────────────────────────────── */
+.fin-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 16px 20px; margin-bottom: 1rem;
+}
+.fin-card-elevated {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 16px 20px; margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
+}
+.fin-section-label {
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-3); margin-bottom: 10px;
+}
+
+/* ── QUERY ZONE ───────────────────────────────────────── */
+.fin-query-zone {
+  background: linear-gradient(145deg, rgba(22,27,34,0.98) 0%, rgba(33,38,45,0.95) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 22px 26px 18px;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-md);
+  position: relative; overflow: hidden;
+}
+.fin-query-zone::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--blue), var(--purple), var(--cyan));
+  opacity: 0.7;
+}
+.fin-query-title {
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--blue); margin-bottom: 12px;
+}
+
+/* ── BADGES ───────────────────────────────────────────── */
+.fin-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;
+  text-transform: uppercase; white-space: nowrap;
+}
+.fin-badge-blue   { background: rgba(88,166,255,.14);  color: var(--blue);   border: 1px solid rgba(88,166,255,.3);   }
+.fin-badge-green  { background: rgba(63,185,80,.14);   color: var(--green);  border: 1px solid rgba(63,185,80,.3);    }
+.fin-badge-amber  { background: rgba(227,179,65,.14);  color: var(--amber);  border: 1px solid rgba(227,179,65,.3);   }
+.fin-badge-orange { background: rgba(240,136,62,.14);  color: var(--orange); border: 1px solid rgba(240,136,62,.3);   }
+.fin-badge-red    { background: rgba(248,81,73,.14);   color: var(--red);    border: 1px solid rgba(248,81,73,.3);    }
+.fin-badge-purple { background: rgba(188,140,255,.14); color: var(--purple); border: 1px solid rgba(188,140,255,.3);  }
+.fin-badge-cyan   { background: rgba(57,211,245,.14);  color: var(--cyan);   border: 1px solid rgba(57,211,245,.3);   }
+.fin-badge-muted  { background: rgba(110,118,129,.12); color: var(--text-2); border: 1px solid rgba(110,118,129,.2);  }
+
+/* ── STICKY ANSWER SUMMARY BAR ────────────────────────── */
+.fin-answer-bar {
+  position: sticky; top: 52px; z-index: 300;
+  background: rgba(13,17,23,0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 9px 16px;
+  margin-bottom: 14px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  box-shadow: var(--shadow-sm);
+  animation: fadeSlideDown 0.3s ease both;
+}
+.fin-bar-sep { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
+.fin-bar-item { display: flex; flex-direction: column; gap: 1px; }
+.fin-bar-lbl  { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); }
+.fin-bar-val  { font-size: 0.82rem; font-weight: 500; color: var(--text-1); font-family: 'JetBrains Mono', monospace; }
+.fin-bar-preview {
+  flex: 1; min-width: 160px;
+  font-size: 0.81rem; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-style: italic;
+}
+
+/* ── ANSWER BODY ──────────────────────────────────────── */
+.fin-answer-body {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--r-md);
+  padding: 22px 26px;
+  margin-bottom: 14px;
+  animation: fadeSlideUp 0.4s ease both;
+}
+.fin-answer-text {
+  font-size: 1rem; line-height: 1.78; color: var(--text-1);
+  max-width: 900px;
+}
+.fin-answer-text p { color: var(--text-1) !important; margin-bottom: 0.75em; }
+.fin-answer-meta {
+  display: flex; gap: 7px; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-sub);
+}
+.fin-assumptions {
+  margin-top: 10px; font-size: 0.8rem; color: var(--text-3);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── SIGNAL DASHBOARD ─────────────────────────────────── */
+.fin-signal-wrap {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px 24px;
+  margin-bottom: 1rem;
+  animation: fadeSlideUp 0.45s ease 0.05s both;
+}
+.fin-rec-box {
+  border: 2px solid; border-radius: var(--r-md);
+  padding: 14px 16px; text-align: center;
+}
+.fin-rec-BUY      { border-color: rgba(63,185,80,.5);   background: rgba(63,185,80,.08);   color: var(--green);  }
+.fin-rec-HOLD     { border-color: rgba(227,179,65,.5);  background: rgba(227,179,65,.08);  color: var(--amber);  }
+.fin-rec-CAUTIOUS { border-color: rgba(240,136,62,.5);  background: rgba(240,136,62,.08);  color: var(--orange); }
+.fin-rec-AVOID    { border-color: rgba(248,81,73,.5);   background: rgba(248,81,73,.08);   color: var(--red);    }
+.fin-rec-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.65; margin-bottom: 4px; }
+.fin-rec-value { font-size: 1.9rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+.fin-score-bar { height: 5px; border-radius: 3px; background: var(--bg-overlay); overflow: hidden; margin: 7px 0 4px; }
+.fin-score-fill { height: 100%; border-radius: 3px; transition: width .6s cubic-bezier(.25,.8,.25,1); }
+.fin-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; margin: 14px 0 4px; }
+.fin-metric-box {
+  background: var(--bg-elevated); border: 1px solid var(--border-sub);
+  border-radius: var(--r-sm); padding: 9px 10px; text-align: center;
+}
+.fin-metric-lbl { font-size: 0.62rem; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; }
+.fin-metric-val { font-size: 1rem; font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-top: 3px; }
+.fin-risk-row {
+  padding: 7px 0; border-bottom: 1px solid var(--border-sub);
+  font-size: 0.83rem; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.fin-risk-row:last-child { border-bottom: none; }
+.fin-catalyst-row {
+  padding: 4px 0; display: flex; align-items: flex-start; gap: 8px; font-size: 0.82rem;
+}
+
+/* ── EVIDENCE TABS ────────────────────────────────────── */
+div[data-testid="stTabs"] > div:first-child {
+  border-bottom: 1px solid var(--border) !important;
+  gap: 4px;
+}
+div[data-testid="stTabs"] button[data-testid="stTab"] {
+  font-size: 0.82rem !important; font-weight: 500 !important;
+  color: var(--text-2) !important;
+  padding: 7px 14px !important; border-radius: var(--r-sm) var(--r-sm) 0 0 !important;
+  border: none !important; background: transparent !important;
+}
+div[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {
+  color: var(--blue) !important;
+  background: rgba(88,166,255,.08) !important;
+  border-bottom: 2px solid var(--blue) !important;
+}
+
+/* ── SOURCE CARDS ─────────────────────────────────────── */
+.fin-src-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-sub);
+  border-radius: var(--r-md);
+  padding: 13px 15px; margin-bottom: 9px;
+  transition: border-color .2s, box-shadow .2s, transform .15s;
+  animation: srcSlideIn .35s ease both;
+}
+.fin-src-card:hover {
+  border-color: rgba(88,166,255,.4);
+  box-shadow: 0 0 14px rgba(88,166,255,.12);
+  transform: translateY(-1px);
+}
+.fin-src-card:nth-child(1)  { animation-delay: .04s; }
+.fin-src-card:nth-child(2)  { animation-delay: .08s; }
+.fin-src-card:nth-child(3)  { animation-delay: .12s; }
+.fin-src-card:nth-child(4)  { animation-delay: .16s; }
+.fin-src-card:nth-child(5)  { animation-delay: .20s; }
+.fin-src-card:nth-child(6)  { animation-delay: .24s; }
+.fin-src-card:nth-child(7)  { animation-delay: .28s; }
+.fin-src-card:nth-child(8)  { animation-delay: .32s; }
+.fin-src-card:nth-child(9)  { animation-delay: .36s; }
+.fin-src-card:nth-child(10) { animation-delay: .40s; }
+.fin-src-idx {
+  background: var(--bg-overlay); border: 1px solid var(--border);
+  border-radius: var(--r-xs); min-width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.68rem; font-weight: 600; color: var(--blue);
+  font-family: 'JetBrains Mono', monospace; flex-shrink: 0;
+}
+.fin-src-header { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 7px; }
+.fin-src-title  { font-size: 0.87rem; font-weight: 500; color: var(--text-1); flex: 1; line-height: 1.4; }
+.fin-src-excerpt {
+  font-size: 0.79rem; color: var(--text-2); line-height: 1.6;
+  padding: 8px 10px; background: rgba(0,0,0,.2); border-radius: var(--r-sm);
+  border-left: 2px solid rgba(88,166,255,.3); font-family: 'JetBrains Mono', monospace;
+  margin: 7px 0; white-space: pre-wrap; word-break: break-word;
+}
+.fin-src-footer {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  padding-top: 8px; border-top: 1px solid var(--border-sub); font-size: 0.72rem; flex-wrap: wrap;
+}
+.fin-src-url { color: var(--text-3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-open-btn {
+  color: var(--blue) !important; font-size: 0.72rem !important; font-weight: 500;
+  padding: 3px 8px; border: 1px solid rgba(88,166,255,.3); border-radius: var(--r-xs);
+  background: rgba(88,166,255,.08); text-decoration: none !important;
+  transition: background .2s, border-color .2s;
+}
+.fin-open-btn:hover { background: rgba(88,166,255,.18) !important; border-color: rgba(88,166,255,.5); }
+
+/* ── XBRL FACT CARD ───────────────────────────────────── */
+.fin-xbrl-card {
+  background: var(--bg-elevated); border: 1px solid var(--border-sub);
+  border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 7px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  animation: srcSlideIn .3s ease both;
+}
+.fin-xbrl-concept { font-size: 0.85rem; font-weight: 500; color: var(--text-1); flex: 1; }
+.fin-xbrl-value {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.95rem;
+  font-weight: 600; color: var(--cyan);
+}
+.fin-xbrl-unit { font-size: 0.72rem; color: var(--text-3); margin-left: 4px; }
+
+/* ── TRACE / AUDIT ────────────────────────────────────── */
+.fin-trace-panel {
+  background: var(--bg-elevated); border: 1px solid rgba(88,166,255,.15);
+  border-radius: var(--r-md); overflow: hidden;
+}
+.fin-trace-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 7px 14px; border-bottom: 1px solid var(--border-sub);
+  font-size: 0.81rem;
+}
+.fin-trace-row:last-child { border-bottom: none; }
+.fin-trace-key { color: var(--text-3); min-width: 120px; font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; padding-top: 1px; }
+.fin-trace-val { color: var(--text-1); flex: 1; word-break: break-word; }
+
+/* ── REASONING PANEL ──────────────────────────────────── */
+.fin-reasoning {
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--r-md); overflow: hidden;
+}
+.fin-rsn-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 8px 14px; border-bottom: 1px solid var(--border-sub); font-size: 0.82rem;
+}
+.fin-rsn-row:last-child { border-bottom: none; }
+.fin-rsn-key { color: var(--text-3); min-width: 150px; font-size: 0.75rem; font-family: 'JetBrains Mono', monospace; padding-top: 2px; }
+.fin-rsn-val { flex: 1; color: var(--text-1); flex-wrap: wrap; }
+.fin-reason-tag {
+  display: inline-block; padding: 2px 7px; border-radius: var(--r-xs); margin: 2px;
+  font-size: 0.71rem; font-family: 'JetBrains Mono', monospace;
+  background: rgba(88,166,255,.1); color: var(--blue); border: 1px solid rgba(88,166,255,.2);
+}
+.fin-warn-tag {
+  display: inline-block; padding: 2px 7px; border-radius: var(--r-xs); margin: 2px;
+  font-size: 0.71rem; font-family: 'JetBrains Mono', monospace;
+  background: rgba(227,179,65,.1); color: var(--amber); border: 1px solid rgba(227,179,65,.2);
+}
+
+/* ── DOCUMENT DRAWER ──────────────────────────────────── */
+.fin-drawer {
+  background: var(--bg-surface); border: 1px solid rgba(88,166,255,.25);
+  border-radius: var(--r-lg); overflow: hidden; margin-bottom: 1.2rem;
+  box-shadow: 0 0 30px rgba(88,166,255,.08);
+  animation: drawerDrop .3s cubic-bezier(.22,1,.36,1) both;
+}
+.fin-drawer-hdr {
+  background: var(--bg-elevated); border-bottom: 1px solid var(--border);
+  padding: 12px 20px; display: flex; align-items: center; gap: 10px;
+}
+.fin-drawer-title { font-size: 0.88rem; font-weight: 600; flex: 1; color: var(--text-1); }
+.fin-drawer-body { padding: 16px 20px; max-height: 480px; overflow-y: auto; }
+
+/* ── EMPTY STATE ──────────────────────────────────────── */
+.fin-empty {
+  text-align: center; padding: 64px 20px;
+  border: 1px dashed var(--border); border-radius: var(--r-xl);
+  animation: fadeIn .5s ease both;
+}
+.fin-empty-icon  { font-size: 2.6rem; margin-bottom: 14px; line-height: 1; }
+.fin-empty-title { font-size: 1.05rem; font-weight: 600; color: var(--text-1); margin-bottom: 6px; }
+.fin-empty-sub   { font-size: 0.85rem; color: var(--text-3); }
+
+/* ── STREAMLIT WIDGET OVERRIDES ───────────────────────── */
+[data-testid="stTextInput"] input {
+  background: var(--bg-elevated) !important; color: var(--text-1) !important;
+  border: 1px solid var(--border) !important; border-radius: var(--r-md) !important;
+  font-size: 0.97rem !important; padding: 10px 14px !important;
+  transition: border-color .2s, box-shadow .2s !important;
+}
+[data-testid="stTextInput"] input:focus {
+  border-color: var(--blue) !important;
+  box-shadow: 0 0 0 3px rgba(88,166,255,.18) !important;
+}
+[data-testid="stTextInput"] label { color: var(--text-3) !important; font-size: 0.77rem !important; }
+
+[data-testid="stSelectbox"] > div > div {
+  background: var(--bg-elevated) !important; color: var(--text-1) !important;
+  border: 1px solid var(--border) !important; border-radius: var(--r-sm) !important;
+}
+[data-testid="stSelectbox"] label { font-size: 0.77rem !important; color: var(--text-3) !important; }
+
+[data-testid="stSlider"] [data-testid="stMarkdownContainer"] p {
+  color: var(--text-3) !important; font-size: 0.77rem !important;
+}
+[data-testid="stSlider"] label { font-size: 0.77rem !important; color: var(--text-3) !important; }
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
+  background: var(--blue) !important;
+}
+
+div[data-testid="stButton"] > button {
+  background: var(--blue) !important; color: #000 !important;
+  border: none !important; border-radius: var(--r-md) !important;
+  font-weight: 600 !important; font-size: 0.88rem !important;
+  padding: 10px 22px !important; letter-spacing: 0.02em;
+  transition: all .2s !important;
+}
+div[data-testid="stButton"] > button:hover {
+  background: #79bbff !important; transform: translateY(-1px) !important;
+  box-shadow: 0 4px 14px rgba(88,166,255,.35) !important;
+}
+div[data-testid="stButton"] > button:active { transform: translateY(0) !important; }
+
+[data-testid="stExpander"] > details {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--r-md) !important;
+}
+[data-testid="stExpander"] > details summary {
+  color: var(--text-1) !important; font-size: 0.86rem !important; font-weight: 500 !important;
+  padding: 10px 14px !important;
+}
+[data-testid="stExpander"] > details summary:hover { background: rgba(255,255,255,.03) !important; }
+
+[data-testid="stMetricLabel"] p  { color: var(--text-3) !important; font-size: 0.72rem !important; }
+[data-testid="stMetricValue"]    { color: var(--text-1) !important; font-family: 'JetBrains Mono', monospace !important; font-size: 1.25rem !important; }
+
+div[data-testid="stStatusWidget"] {
+  background: var(--bg-surface) !important;
+  border: 1px solid rgba(88,166,255,.25) !important;
+  border-radius: var(--r-md) !important;
+}
+div[data-testid="stStatusWidget"] p { color: var(--text-2) !important; font-size: 0.84rem !important; }
+
+/* Code blocks */
+[data-testid="stCode"] pre {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-sub) !important;
+  border-radius: var(--r-sm) !important;
+  font-size: 0.8rem !important; line-height: 1.6 !important;
+  color: var(--text-2) !important;
+}
+
+/* Download buttons */
+[data-testid="stDownloadButton"] > button {
+  background: transparent !important; color: var(--blue) !important;
+  border: 1px solid rgba(88,166,255,.3) !important; border-radius: var(--r-sm) !important;
+  font-size: 0.8rem !important; padding: 6px 14px !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+  background: rgba(88,166,255,.1) !important; transform: none !important; box-shadow: none !important;
+}
+
+/* Alerts */
+[data-testid="stAlert"] { border-radius: var(--r-md) !important; }
+
+/* ── ANIMATIONS ───────────────────────────────────────── */
+@keyframes fadeIn       { from { opacity: 0 }           to { opacity: 1 } }
+@keyframes fadeSlideUp  { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes fadeSlideDown{ from { opacity: 0; transform: translateY(-8px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes srcSlideIn   { from { opacity: 0; transform: translateY(7px) }  to { opacity: 1; transform: translateY(0) } }
+@keyframes drawerDrop   { from { opacity: 0; transform: scaleY(.97) }       to { opacity: 1; transform: scaleY(1) } }
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 rgba(88,166,255,0); }
+  50%       { box-shadow: 0 0 20px rgba(88,166,255,.25); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.fin-shimmer {
+  background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-elevated) 50%, var(--bg-surface) 75%);
+  background-size: 200% 100%; animation: shimmer 1.6s infinite;
+  border-radius: var(--r-sm); height: 14px;
+}
 </style>
 """
 
+_EMPTY_HTML = """
+<div class="fin-empty">
+  <div class="fin-empty-icon">{icon}</div>
+  <div class="fin-empty-title">{title}</div>
+  <div class="fin-empty-sub">{sub}</div>
+</div>
+"""
 
-# ---------------------------
-# Orchestrator init (cached)
-# ---------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ORCHESTRATOR (cached)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @st.cache_resource(show_spinner=False)
 def get_orchestrator() -> FinancialOrchestrator:
     base_dir = Path(__file__).resolve().parent
     audit_log = base_dir / "logs" / "audit.jsonl"
 
-    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-    primary_model = os.environ.get("LOCAL_SMALL_MODEL", DEFAULT_PRIMARY_MODEL)
-    fallback_model = os.environ.get("LOCAL_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL)
-
     llm_client = build_local_llm_client(
-        primary_model=primary_model,
-        fallback_model=fallback_model,
-        base_url=ollama_url,
+        primary_model=os.environ.get("GEMINI_SMALL_MODEL", DEFAULT_PRIMARY_MODEL),
+        fallback_model=os.environ.get("GEMINI_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
+        base_url=os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
     )
-
     cfg = OrchestratorConfig(
         base_dir=base_dir,
         audit_log_path=audit_log,
@@ -105,38 +567,35 @@ def get_orchestrator() -> FinancialOrchestrator:
         large_model_name=os.environ.get("LOCAL_LARGE_MODEL", "large"),
         known_tickers={t.upper() for t in KB_TICKERS if isinstance(t, str) and t.strip()} or None,
         market_provider=YahooFinanceMarketDataProvider(),
+        news_client=build_optional_news_client(),
     )
     return FinancialOrchestrator(cfg=cfg, llm_client=llm_client)
 
 
-# ---------------------------
-# Helpers
-# ---------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _safe_to_dict(x: Any) -> Any:
-    if is_dataclass(x):
-        return asdict(x)
-    return x
+    return asdict(x) if is_dataclass(x) else x
+
 
 def _extract_final_answer(res: Dict[str, Any]) -> str:
-    """Extract the core RAG answer (without signal layer — signals rendered separately)."""
     result = res.get("result", {}) or {}
     ans = result.get("final_answer", "")
     assumptions = res.get("assumptions", []) or []
-    assumption_text = ""
-    if assumptions:
-        assumption_text = "\n\nAssumption(s): " + " ".join(str(a) for a in assumptions)
-
+    suffix = ("\n\n*Assumptions: " + "; ".join(str(a) for a in assumptions) + "*") if assumptions else ""
     if isinstance(ans, str) and ans.strip():
         text = ans.strip()
         sep = "--- Investment Signal:"
         if sep in text:
-            text = text[:text.index(sep)].rstrip()
-        return (text + assumption_text) if text else f"No final answer generated.{assumption_text}"
-
+            text = text[: text.index(sep)].rstrip()
+        return (text + suffix) if text else f"No final answer generated.{suffix}"
     reason = res.get("reason")
     if isinstance(reason, str) and reason.strip():
-        return f"No final answer generated. Reason: {reason}{assumption_text}"
-    return f"No final answer generated.{assumption_text}"
+        return f"[{reason}]{suffix}"
+    return f"No answer generated.{suffix}"
+
 
 def _health_check(base_dir: Path) -> Dict[str, Any]:
     index_dir = base_dir / "index"
@@ -150,10 +609,8 @@ def _health_check(base_dir: Path) -> Dict[str, Any]:
         base_dir / "data" / "xbrl_companyfacts",
     ]
     missing = [str(p) for p in required if not p.exists()]
-    return {
-        "ok": len(missing) == 0,
-        "missing": missing,
-    }
+    return {"ok": len(missing) == 0, "missing": missing}
+
 
 def _flatten_evidence(res: Dict[str, Any]) -> Dict[str, Any]:
     ev = res.get("evidence", {}) or {}
@@ -162,147 +619,779 @@ def _flatten_evidence(res: Dict[str, Any]) -> Dict[str, Any]:
     xbrl = ev.get("xbrl", {}) if isinstance(ev, dict) else {}
     return {"narrative": narrative, "tables": tables, "xbrl": xbrl}
 
+
 def _read_audit_log(path: Path, tail: int = 300) -> str:
     if not path.exists():
         return ""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        if tail and len(lines) > tail:
-            lines = lines[-tail:]
-        return "\n".join(lines)
+        return "\n".join(lines[-tail:] if tail and len(lines) > tail else lines)
     except Exception:
         return ""
+
 
 def _available_fiscal_years(base_dir: Path) -> list[int]:
     years: set[int] = set()
     fy_re = re.compile(r"_FY(\d{4})_")
-
     for rel_dir in ("data/sections", "data/tables", "data/raw_html"):
         d = base_dir / rel_dir
         if not d.exists():
             continue
         for p in d.glob("*"):
             m = fy_re.search(p.name)
-            if not m:
-                continue
-            try:
-                years.add(int(m.group(1)))
-            except Exception:
-                continue
-
-    if years:
-        return sorted(years)
-    return UI_FISCAL_YEARS
+            if m:
+                try:
+                    years.add(int(m.group(1)))
+                except Exception:
+                    pass
+    return sorted(years) if years else UI_FISCAL_YEARS
 
 
-# ---------------------------
-# Page
-# ---------------------------
-def main():
-    st.set_page_config(page_title="Finance Analyst Terminal", layout="wide")
-    st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
+def _get_best_evidence(r: Dict) -> List[Dict]:
+    """Extract evidence blocks from verification.best_evidence (preferred) or flatten."""
+    raw = r.get("raw", {}) or {}
+    ver = raw.get("verification", {}) or {}
+    best = ver.get("best_evidence", []) or []
+    if best:
+        return [b if isinstance(b, dict) else _safe_to_dict(b) for b in best]
+    return []
 
-    if "history" not in st.session_state:
-        st.session_state.history = []  # list of normalized runs
 
-    orch = None
-    base_dir = Path(__file__).resolve().parent
+def _action_badge_cls(action: str) -> str:
+    return {"answer": "green", "abstain": "amber", "clarify": "blue", "error": "red"}.get(action, "muted")
 
-    # Sidebar (System/Session)
+
+def _rec_cls(rec: str) -> str:
+    return {"BUY": "BUY", "HOLD": "HOLD", "CAUTIOUS": "CAUTIOUS", "AVOID": "AVOID"}.get(rec.upper(), "HOLD")
+
+
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_header(hc: Dict, gemini_ok: bool, crumb: str = "") -> None:
+    idx_dot = "green" if hc["ok"] else "red"
+    api_dot = "green" if gemini_ok else "red"
+    crumb_html = (
+        f'<div class="fin-hdr-crumb">▸ {_esc(crumb[:80])}</div>'
+        if crumb else ""
+    )
+    st.markdown(
+        f"""
+        <div class="fin-header">
+          <div class="fin-header-inner">
+            <div class="fin-logo">FinSight<em>// Financial Intelligence Terminal</em></div>
+            {crumb_html}
+            <div class="fin-hdr-spacer"></div>
+            <div class="fin-hdr-status">
+              <span class="fin-dot fin-dot-{idx_dot}"></span>
+              <span class="fin-status-lbl">Index</span>
+              <div class="fin-hdr-sep"></div>
+              <span class="fin-dot fin-dot-{api_dot}"></span>
+              <span class="fin-status-lbl">API</span>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ANSWER SECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_answer_section(r: Dict) -> None:
+    raw      = r.get("raw", {}) or {}
+    action   = r.get("action", "abstain")
+    routing  = r.get("routing") or {}
+    ver      = raw.get("verification", {}) or {}
+    conf     = ver.get("confidence")
+    model    = routing.get("model", "—")
+    ticker   = r.get("ticker") or "auto"
+    fy       = r.get("fiscal_year") or "auto"
+    mode_str = r.get("mode", "—")
+    lat      = r.get("latency_s", 0)
+    run_id   = r.get("run_id", "—")
+    conf_str = f"{float(conf):.0%}" if conf is not None else "—"
+    ans_prev = _esc((r.get("final_answer") or "")[:100])
+    act_cls  = _action_badge_cls(action)
+
+    # ── Sticky summary bar ──
+    st.markdown(
+        f"""
+        <div class="fin-answer-bar">
+          <div class="fin-bar-item">
+            <div class="fin-bar-lbl">Action</div>
+            <span class="fin-badge fin-badge-{act_cls}">{action.upper()}</span>
+          </div>
+          <div class="fin-bar-sep"></div>
+          <div class="fin-bar-item">
+            <div class="fin-bar-lbl">Ticker / FY</div>
+            <div class="fin-bar-val">{_esc(str(ticker))} / {_esc(str(fy))}</div>
+          </div>
+          <div class="fin-bar-sep"></div>
+          <div class="fin-bar-item">
+            <div class="fin-bar-lbl">Mode</div>
+            <div class="fin-bar-val">{_esc(mode_str)}</div>
+          </div>
+          <div class="fin-bar-sep"></div>
+          <div class="fin-bar-item">
+            <div class="fin-bar-lbl">Model · Confidence · Latency</div>
+            <div class="fin-bar-val">{_esc(model)} · {conf_str} · {lat}s</div>
+          </div>
+          <div class="fin-bar-sep"></div>
+          <div class="fin-bar-preview">{ans_prev}…</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Full answer body ──
+    st.markdown('<div class="fin-answer-body">', unsafe_allow_html=True)
+    st.markdown('<div class="fin-answer-text">', unsafe_allow_html=True)
+    st.markdown(r.get("final_answer", "*No answer generated.*"))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Validation warnings
+    for err in (raw.get("validation_errors") or []):
+        st.warning(f"Validation: {err}")
+
+    # Meta badges
+    st.markdown(
+        f'<div class="fin-answer-meta">'
+        f'<span class="fin-badge fin-badge-muted">run: {_esc(run_id)}</span>'
+        f'<span class="fin-badge fin-badge-muted">mode: {_esc(mode_str)}</span>'
+        f'<span class="fin-badge fin-badge-blue">model: {_esc(model)}</span>'
+        f'<span class="fin-badge fin-badge-{"green" if act_cls == "green" else "muted"}">{action}</span>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)  # fin-answer-body
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIGNAL DASHBOARD
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_signal_section(raw: Dict) -> None:
+    report    = raw.get("hackathon_signal_report") or {}
+    score_obj = raw.get("hackathon_signal_score") or {}
+    if not report:
+        return
+
+    rec      = str(report.get("recommendation", "HOLD")).upper()
+    rec_key  = _rec_cls(rec)
+    strength = float(report.get("signal_strength", 0.0))
+    conf     = float(report.get("confidence", 0.0))
+    comp     = score_obj.get("component_scores", {}) or {}
+
+    with st.expander("Investment Signal", expanded=True):
+        st.markdown('<div class="fin-signal-wrap" style="border:none;padding:0;margin:0">', unsafe_allow_html=True)
+
+        # ── Top row: rec + strength + confidence ──
+        c1, c2, c3, c4 = st.columns([1.2, 2, 2, 2])
+
+        with c1:
+            st.markdown(
+                f'<div class="fin-rec-box fin-rec-{rec_key}">'
+                f'<div class="fin-rec-label">Recommendation</div>'
+                f'<div class="fin-rec-value">{rec}</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        with c2:
+            bar_pct  = min(100, int(abs(strength) * 100))
+            bar_col  = "var(--green)" if strength > 0 else "var(--red)" if strength < 0 else "var(--text-3)"
+            st.markdown(
+                f'<div style="padding:6px 0">'
+                f'<div class="fin-metric-lbl" style="margin-bottom:6px">Signal Strength</div>'
+                f'<div class="fin-score-bar"><div class="fin-score-fill" style="width:{bar_pct}%;background:{bar_col}"></div></div>'
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:1rem;font-weight:600;color:{bar_col}">{strength:+.3f}</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        with c3:
+            conf_pct = int(conf * 100)
+            st.markdown(
+                f'<div style="padding:6px 0">'
+                f'<div class="fin-metric-lbl" style="margin-bottom:6px">Confidence</div>'
+                f'<div class="fin-score-bar"><div class="fin-score-fill" style="width:{conf_pct}%;background:var(--blue)"></div></div>'
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:1rem;font-weight:600;color:var(--blue)">{conf:.0%}</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        with c4:
+            if comp:
+                dominant = max(comp, key=lambda k: abs(float(comp[k])))
+                dom_val  = float(comp[dominant])
+                dom_col  = "var(--green)" if dom_val > 0 else "var(--red)"
+                st.markdown(
+                    f'<div style="padding:6px 0">'
+                    f'<div class="fin-metric-lbl" style="margin-bottom:6px">Dominant Factor</div>'
+                    f'<div style="font-size:1rem;font-weight:600;color:{dom_col}">{dominant.title()}</div>'
+                    f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.82rem;color:{dom_col}">{dom_val:+.2f}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        # ── Component score grid ──
+        if comp:
+            score_html = ""
+            for k, v in comp.items():
+                v_f  = float(v)
+                col  = "var(--green)" if v_f > 0.05 else "var(--red)" if v_f < -0.05 else "var(--text-3)"
+                score_html += (
+                    f'<div class="fin-metric-box">'
+                    f'<div class="fin-metric-lbl">{k.upper()}</div>'
+                    f'<div class="fin-metric-val" style="color:{col}">{v_f:+.2f}</div>'
+                    f"</div>"
+                )
+            st.markdown(f'<div class="fin-metric-grid">{score_html}</div>', unsafe_allow_html=True)
+
+        st.markdown("<hr style='border-color:var(--border);margin:14px 0'>", unsafe_allow_html=True)
+
+        # ── Details: findings + risks | tone + valuation + catalysts ──
+        left, right = st.columns([3, 2])
+
+        with left:
+            findings = report.get("key_findings", []) or []
+            if findings:
+                st.markdown("**Key Findings**")
+                for f in findings[:6]:
+                    st.markdown(f"- {f}")
+
+            risks = report.get("top_risks", []) or []
+            if risks:
+                st.markdown("**Top Risks**")
+                for risk in risks[:5]:
+                    sev     = str(risk.get("severity", "")).lower()
+                    sev_cls = "red" if sev in ("high", "critical") else "amber" if sev == "medium" else "muted"
+                    cat     = _esc(str(risk.get("category", "")))
+                    cnt     = risk.get("count", 0)
+                    st.markdown(
+                        f'<div class="fin-risk-row">'
+                        f'<span class="fin-badge fin-badge-{sev_cls}">{sev.upper() or "?"}</span>'
+                        f'<span style="color:var(--text-1)">{cat}</span>'
+                        f'<span style="color:var(--text-3);font-size:0.75rem">({cnt} mentions)</span>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for snip in (risk.get("snippets") or [])[:1]:
+                        st.caption(f'"{str(snip)[:120]}…"')
+
+        with right:
+            # Tone trend
+            tone = report.get("tone_trend", {}) or {}
+            if tone and tone.get("direction"):
+                direction = tone.get("direction", "flat")
+                delta     = float(tone.get("delta", 0.0))
+                arrows    = {"improving": "↑", "worsening": "↓", "flat": "→"}
+                t_cols    = {"improving": "var(--green)", "worsening": "var(--red)", "flat": "var(--text-3)"}
+                col = t_cols.get(direction, "var(--text-3)")
+                st.markdown(
+                    f'<div class="fin-card" style="margin-bottom:10px">'
+                    f'<div class="fin-metric-lbl">Tone Trend</div>'
+                    f'<div style="font-size:1.3rem;font-weight:700;color:{col};margin:4px 0">'
+                    f'{arrows.get(direction,"→")} {direction.title()}</div>'
+                    f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.8rem;color:var(--text-3)">delta: {delta:+.2f}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Valuation summary
+            val    = report.get("valuation_summary", {}) or {}
+            gap    = val.get("valuation_gap_pct")
+            growth = val.get("revenue_growth_yoy")
+            if gap is not None or growth is not None:
+                gap_s = f"{float(gap):+.1%}" if gap is not None else "—"
+                grw_s = f"{float(growth):+.1%}" if growth is not None else "—"
+                st.markdown(
+                    f'<div class="fin-card" style="margin-bottom:10px">'
+                    f'<div class="fin-metric-lbl" style="margin-bottom:8px">Valuation</div>'
+                    f'<div style="display:flex;gap:20px">'
+                    f'<div><div class="fin-metric-lbl">Val. Gap</div>'
+                    f'<div class="fin-bar-val" style="font-family:\'JetBrains Mono\',monospace;font-size:0.9rem;color:var(--text-1)">{gap_s}</div></div>'
+                    f'<div><div class="fin-metric-lbl">Rev. Growth YoY</div>'
+                    f'<div class="fin-bar-val" style="font-family:\'JetBrains Mono\',monospace;font-size:0.9rem;color:var(--text-1)">{grw_s}</div></div>'
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # News catalysts
+            news = report.get("news_summary", []) or []
+            if news:
+                st.markdown("**Recent Catalysts**")
+                for n in news[:6]:
+                    d   = n.get("direction", "neutral")
+                    dot = {"positive": "green", "negative": "red"}.get(d, "muted")
+                    ttl = _esc(str(n.get("title", "")))
+                    st.markdown(
+                        f'<div class="fin-catalyst-row">'
+                        f'<span class="fin-dot fin-dot-{dot}" style="margin-top:5px;flex-shrink:0"></span>'
+                        f'<span style="color:var(--text-2)">{ttl}</span>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+        # Full analyst report
+        mkd = raw.get("hackathon_signal_markdown", "")
+        if mkd:
+            with st.expander("Full Analyst Report (Markdown)"):
+                st.markdown(mkd)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EVIDENCE TABS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_evidence_tabs(r: Dict, base_dir: Path) -> None:
+    evidence    = r.get("evidence", {}) or {}
+    xbrl_ev     = evidence.get("xbrl", {}) or {}
+    best_ev     = _get_best_evidence(r)
+
+    # Split best_evidence by kind
+    chunks = [e for e in best_ev if e.get("kind") not in ("table",)]
+    tables = [e for e in best_ev if e.get("kind") == "table"]
+
+    # Also pull table records from evidence dict if present
+    tables_ev = evidence.get("tables", {}) or {}
+    tbl_recs  = tables_ev.get("records", []) or []
+    if not tables and tbl_recs:
+        tables = tbl_recs
+
+    xbrl_hits = xbrl_ev.get("hits", []) or xbrl_ev.get("facts", []) or []
+    packed_ctx = r.get("packed_context", "") or ""
+
+    tab_src, tab_tbl, tab_ctx, tab_xbrl, tab_audit = st.tabs([
+        "Source Summary", "Table View", "Expandable Context", "XBRL Facts", "Audit Trace",
+    ])
+
+    # ── TAB 1: Source Summary ─────────────────────────────
+    with tab_src:
+        if not chunks:
+            st.markdown(_EMPTY_HTML.format(icon="📄", title="No sources retrieved", sub="Run a query to see evidence sources"), unsafe_allow_html=True)
+        else:
+            for i, blk in enumerate(chunks[:16], 1):
+                title     = (blk.get("metadata", {}) or {}).get("doc_title") or blk.get("source") or f"Source {i}"
+                ticker_b  = blk.get("ticker", "") or ""
+                fy_b      = blk.get("fiscal_year", "") or ""
+                item_b    = blk.get("item", "") or ""
+                evid_id   = blk.get("evid", "") or blk.get("id", "")
+                kind_b    = blk.get("kind", "chunk")
+                src_type  = blk.get("source_type", "")
+                text_full = blk.get("text", "") or ""
+                excerpt   = _esc(text_full[:240])
+                url       = (blk.get("metadata", {}) or {}).get("source_url") or (blk.get("metadata", {}) or {}).get("url") or ""
+
+                ticker_badge = f'<span class="fin-badge fin-badge-purple">{_esc(str(ticker_b))}</span>' if ticker_b else ""
+                fy_badge     = f'<span class="fin-badge fin-badge-muted">FY{fy_b}</span>' if fy_b else ""
+                item_badge   = f'<span class="fin-badge fin-badge-muted">{_esc(str(item_b))}</span>' if item_b else ""
+                kind_badge   = f'<span class="fin-badge fin-badge-cyan">{kind_b}</span>' if kind_b else ""
+                open_btn     = (f'<a class="fin-open-btn" href="{url}" target="_blank">↗ Open Source</a>' if url else "")
+
+                st.markdown(
+                    f'<div class="fin-src-card">'
+                    f'<div class="fin-src-header">'
+                    f'  <div class="fin-src-idx">{i}</div>'
+                    f'  <div class="fin-src-title">{_esc(str(title))}</div>'
+                    f'</div>'
+                    f'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px">{ticker_badge}{fy_badge}{item_badge}{kind_badge}</div>'
+                    f'<div class="fin-src-excerpt">{excerpt}{"…" if len(text_full) > 240 else ""}</div>'
+                    f'<div class="fin-src-footer">'
+                    f'  <span class="fin-src-url">{_esc(url[:70])}{"…" if len(url) > 70 else ""}</span>'
+                    f'  {open_btn}'
+                    f'</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                # Preview drawer button
+                if text_full:
+                    if st.button("Preview document", key=f"prev_{i}_{evid_id}", help="Open document preview"):
+                        st.session_state.preview_doc = {
+                            "title": str(title), "text": text_full,
+                            "url": url, "ticker": str(ticker_b),
+                            "fy": str(fy_b), "item": str(item_b),
+                        }
+                        st.session_state.show_drawer = True
+                        st.rerun()
+
+    # ── TAB 2: Table View ─────────────────────────────────
+    with tab_tbl:
+        if not tables:
+            st.markdown(_EMPTY_HTML.format(icon="📊", title="No tables retrieved", sub="Numeric and financial queries surface structured tables"), unsafe_allow_html=True)
+        else:
+            for i, blk in enumerate(tables[:12], 1):
+                title    = (blk.get("metadata", {}) or {}).get("title") or blk.get("title") or f"Table {i}"
+                ticker_b = blk.get("ticker", "") or ""
+                fy_b     = blk.get("fiscal_year", "") or ""
+                url      = (blk.get("metadata", {}) or {}).get("source_url") or ""
+                text     = blk.get("text", "") or blk.get("surrogate_text", "") or ""
+
+                with st.expander(f"Table {i} — {title}", expanded=(i <= 2)):
+                    col_meta, col_link = st.columns([5, 1])
+                    with col_meta:
+                        badges = ""
+                        if ticker_b: badges += f'<span class="fin-badge fin-badge-purple" style="margin-right:5px">{_esc(str(ticker_b))}</span>'
+                        if fy_b:     badges += f'<span class="fin-badge fin-badge-muted" style="margin-right:5px">FY{fy_b}</span>'
+                        if badges:   st.markdown(badges, unsafe_allow_html=True)
+                    with col_link:
+                        if url:
+                            st.markdown(f'<a class="fin-open-btn" href="{url}" target="_blank">↗ Source</a>', unsafe_allow_html=True)
+                    st.code(text[:8000], language=None)
+
+    # ── TAB 3: Expandable Context ─────────────────────────
+    with tab_ctx:
+        all_blocks = chunks or best_ev
+        if not all_blocks:
+            st.markdown(_EMPTY_HTML.format(icon="📝", title="No context chunks", sub=""), unsafe_allow_html=True)
+        else:
+            for i, blk in enumerate(all_blocks[:20], 1):
+                title    = (blk.get("metadata", {}) or {}).get("doc_title") or f"Chunk {i}"
+                item_b   = blk.get("item", "") or ""
+                evid_id  = blk.get("evid", "") or blk.get("id", "")
+                text     = blk.get("text", "") or ""
+                url      = (blk.get("metadata", {}) or {}).get("source_url") or ""
+                label    = f"{i}. {title}{(' · ' + str(item_b)) if item_b else ''}"
+
+                with st.expander(label, expanded=False):
+                    st.code(text[:10000], language=None)
+                    if len(text) > 10000:
+                        st.caption(f"…truncated to 10 000 of {len(text):,} chars")
+                    foot_c1, foot_c2 = st.columns(2)
+                    with foot_c1:
+                        if url:
+                            st.markdown(f'<a class="fin-open-btn" href="{url}" target="_blank">↗ Open Source</a>', unsafe_allow_html=True)
+                    with foot_c2:
+                        if evid_id:
+                            st.caption(f"Evidence ID: {evid_id}")
+
+    # ── TAB 4: XBRL Facts ────────────────────────────────
+    with tab_xbrl:
+        if not xbrl_hits:
+            st.markdown(_EMPTY_HTML.format(icon="🔢", title="No XBRL facts", sub="Numeric lookups pull structured XBRL company facts"), unsafe_allow_html=True)
+        else:
+            for fact in xbrl_hits[:40]:
+                if not isinstance(fact, dict):
+                    continue
+                concept  = fact.get("concept") or fact.get("label") or "Unknown"
+                value    = fact.get("value")
+                unit     = fact.get("unit", "") or ""
+                fy_x     = fact.get("fy") or fact.get("fiscal_year") or ""
+                ticker_x = fact.get("ticker", "") or ""
+                end_x    = fact.get("end", "") or ""
+                val_str  = f"{value:,.2f}" if isinstance(value, (int, float)) else str(value) if value is not None else "—"
+
+                tb = f'<span class="fin-badge fin-badge-purple" style="margin-right:4px">{_esc(str(ticker_x))}</span>' if ticker_x else ""
+                fyb = f'<span class="fin-badge fin-badge-muted" style="margin-right:4px">FY{fy_x}</span>' if fy_x else ""
+                eb  = f'<span class="fin-badge fin-badge-muted">{_esc(end_x)}</span>' if end_x else ""
+
+                st.markdown(
+                    f'<div class="fin-xbrl-card">'
+                    f'<div class="fin-xbrl-concept">{_esc(str(concept))}</div>'
+                    f'<div><span class="fin-xbrl-value">{_esc(val_str)}</span>'
+                    f'<span class="fin-xbrl-unit">{_esc(unit)}</span></div>'
+                    f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">{tb}{fyb}{eb}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+    # ── TAB 5: Audit Trace ───────────────────────────────
+    with tab_audit:
+        raw_r   = r.get("raw", {}) or {}
+        routing = _safe_to_dict(r.get("routing", {})) or {}
+        gate    = _safe_to_dict(r.get("gate", {})) or {}
+        timing  = raw_r.get("timing_ms", {}) or {}
+
+        if routing:
+            st.markdown("**Routing Decision**")
+            rows = "".join(
+                f'<div class="fin-trace-row"><span class="fin-trace-key">{_esc(str(k))}</span>'
+                f'<span class="fin-trace-val">{_esc(str(v))}</span></div>'
+                for k, v in routing.items()
+            )
+            st.markdown(f'<div class="fin-trace-panel">{rows}</div>', unsafe_allow_html=True)
+
+        if timing:
+            st.markdown("**Timing (ms)**")
+            rows = "".join(
+                f'<div class="fin-trace-row"><span class="fin-trace-key">{_esc(str(k))}</span>'
+                f'<span class="fin-trace-val" style="font-family:\'JetBrains Mono\',monospace">{_esc(str(v))}</span></div>'
+                for k, v in timing.items()
+            )
+            st.markdown(f'<div class="fin-trace-panel">{rows}</div>', unsafe_allow_html=True)
+
+        for err in (raw_r.get("validation_errors") or []):
+            st.error(err)
+
+        if packed_ctx.strip():
+            with st.expander("Packed Context (sent to LLM)"):
+                st.code(packed_ctx[:12000], language=None)
+                st.download_button(
+                    "Download packed_context.txt", packed_ctx.encode(),
+                    f"packed_context_{r['run_id']}.txt", "text/plain",
+                )
+
+        audit_path = base_dir / "logs" / "audit.jsonl"
+        audit_tail = _read_audit_log(audit_path, tail=200)
+        if audit_tail.strip():
+            with st.expander("Audit Log (last 200 entries)"):
+                st.code(audit_tail)
+                st.download_button(
+                    "Download audit.jsonl",
+                    audit_path.read_bytes() if audit_path.exists() else b"",
+                    "audit.jsonl", "application/json",
+                )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS ANSWER (reasoning panel)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_reasoning_panel(r: Dict) -> None:
+    raw     = r.get("raw", {}) or {}
+    ver     = raw.get("verification", {}) or {}
+    routing = r.get("routing") or {}
+
+    status   = ver.get("status", "—")
+    conf     = ver.get("confidence")
+    mode_str = raw.get("mode", "—")
+    model    = routing.get("model", "—")
+    r_action = routing.get("action", "—")
+    codes    = list(ver.get("reason_codes", []) or []) + list(routing.get("reason_codes", []) or [])
+    warnings = ver.get("warnings", []) or []
+    coverage = ver.get("source_coverage", {}) or {}
+
+    with st.expander("Why This Answer", expanded=False):
+        rows_html = ""
+
+        s_cls = "green" if status == "answer" else "amber"
+        rows_html += (
+            f'<div class="fin-rsn-row"><span class="fin-rsn-key">verification_status</span>'
+            f'<span class="fin-badge fin-badge-{s_cls}">{_esc(status)}</span></div>'
+        )
+
+        if conf is not None:
+            rows_html += (
+                f'<div class="fin-rsn-row"><span class="fin-rsn-key">gate_confidence</span>'
+                f'<span class="fin-rsn-val" style="font-family:\'JetBrains Mono\',monospace">{float(conf):.2%}</span></div>'
+            )
+
+        rows_html += (
+            f'<div class="fin-rsn-row"><span class="fin-rsn-key">query_mode</span>'
+            f'<span class="fin-rsn-val" style="font-family:\'JetBrains Mono\',monospace">{_esc(mode_str)}</span></div>'
+        )
+
+        rows_html += (
+            f'<div class="fin-rsn-row"><span class="fin-rsn-key">routing</span>'
+            f'<span class="fin-rsn-val">{_esc(r_action)} via <strong style="color:var(--text-1)">{_esc(model)}</strong></span></div>'
+        )
+
+        if codes:
+            tags = "".join(f'<span class="fin-reason-tag">{_esc(c)}</span>' for c in codes)
+            rows_html += (
+                f'<div class="fin-rsn-row"><span class="fin-rsn-key">reason_codes</span>'
+                f'<span class="fin-rsn-val" style="flex-wrap:wrap;display:flex;gap:2px">{tags}</span></div>'
+            )
+
+        if warnings:
+            tags = "".join(f'<span class="fin-warn-tag">{_esc(w)}</span>' for w in warnings)
+            rows_html += (
+                f'<div class="fin-rsn-row"><span class="fin-rsn-key">warnings</span>'
+                f'<span class="fin-rsn-val" style="flex-wrap:wrap;display:flex;gap:2px">{tags}</span></div>'
+            )
+
+        if coverage:
+            cov_html = " ".join(
+                f'<span class="fin-badge fin-badge-{"green" if v else "muted"}">'
+                f'{_esc(src)} {"✓" if v else "✗"}</span>'
+                for src, v in coverage.items()
+            )
+            rows_html += (
+                f'<div class="fin-rsn-row"><span class="fin-rsn-key">source_coverage</span>'
+                f'<span class="fin-rsn-val">{cov_html}</span></div>'
+            )
+
+        # Best evidence IDs
+        best_ev  = _get_best_evidence(r)
+        evid_ids = [e.get("evid") or e.get("id") for e in best_ev if e.get("evid") or e.get("id")]
+        if evid_ids:
+            id_tags = " ".join(f'<span class="fin-reason-tag">{_esc(str(x))}</span>' for x in evid_ids[:12])
+            rows_html += (
+                f'<div class="fin-rsn-row"><span class="fin-rsn-key">evidence_ids</span>'
+                f'<span class="fin-rsn-val" style="flex-wrap:wrap;display:flex;gap:2px">{id_tags}</span></div>'
+            )
+
+        st.markdown(f'<div class="fin-reasoning">{rows_html}</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOCUMENT PREVIEW DRAWER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_document_drawer() -> None:
+    doc = st.session_state.get("preview_doc") or {}
+    if not doc:
+        return
+
+    title  = doc.get("title", "Document Preview")
+    text   = doc.get("text", "")
+    url    = doc.get("url", "")
+    ticker = doc.get("ticker", "")
+    fy     = doc.get("fy", "")
+    item   = doc.get("item", "")
+
+    tb  = f'<span class="fin-badge fin-badge-purple" style="margin-left:8px">{_esc(ticker)}</span>' if ticker else ""
+    fyb = f'<span class="fin-badge fin-badge-muted" style="margin-left:4px">FY{_esc(fy)}</span>' if fy else ""
+    itb = f'<span class="fin-badge fin-badge-muted" style="margin-left:4px">{_esc(item)}</span>' if item else ""
+
+    st.markdown(
+        f'<div class="fin-drawer">'
+        f'<div class="fin-drawer-hdr">'
+        f'<div class="fin-drawer-title">Document Preview</div>'
+        f'<span style="font-size:0.82rem;color:var(--text-2)">{_esc(str(title))[:60]}</span>'
+        f"{tb}{fyb}{itb}"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    col_text, col_btn = st.columns([6, 1])
+    with col_text:
+        st.code(text[:14000], language=None)
+        if len(text) > 14000:
+            st.caption(f"…truncated ({len(text):,} chars total)")
+        if url:
+            st.markdown(f'<a class="fin-open-btn" href="{url}" target="_blank" style="font-size:0.8rem">↗ Open Full Source Document</a>', unsafe_allow_html=True)
+    with col_btn:
+        if st.button("✕ Close", key="close_drawer"):
+            st.session_state.show_drawer = False
+            st.session_state.preview_doc = None
+            st.rerun()
+
+    st.markdown("<hr style='border-color:var(--border);margin:4px 0 1.2rem'>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    st.set_page_config(
+        page_title="FinSight — Financial Intelligence Terminal",
+        page_icon="📊",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+    st.markdown(DARK_CSS, unsafe_allow_html=True)
+
+    base_dir  = Path(__file__).resolve().parent
+    hc        = _health_check(base_dir)
+    gemini_ok = bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+
+    # ── Session state init ──────────────────────────────
+    if "history"     not in st.session_state: st.session_state.history     = []
+    if "show_drawer" not in st.session_state: st.session_state.show_drawer = False
+    if "preview_doc" not in st.session_state: st.session_state.preview_doc = None
+
+    # ── Sidebar ─────────────────────────────────────────
     with st.sidebar:
-        st.title("System")
-
-        st.markdown("---")
-        st.subheader("System health")
-        hc = _health_check(base_dir)
+        st.markdown("### System Status")
         if hc["ok"]:
             st.success("Index files: READY")
         else:
             st.error("Index files: MISSING")
-            st.code("\n".join(hc["missing"]))
+            with st.expander("Missing files"):
+                for m in hc["missing"]:
+                    st.caption(m)
 
-        # Ollama status check
-        ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-        try:
-            import requests as _req
-            _r = _req.get(f"{ollama_url}/api/tags", timeout=3)
-            ollama_ok = _r.status_code == 200
-        except Exception:
-            ollama_ok = False
-        if ollama_ok:
-            st.success(f"Ollama: CONNECTED ({ollama_url})")
+        if gemini_ok:
+            st.success("Gemini API: ACTIVE")
         else:
-            st.error(f"Ollama: NOT REACHABLE ({ollama_url})")
+            st.error("Gemini API: MISSING")
+            st.caption("Set GEMINI_API_KEY in .env")
 
         st.markdown("---")
-        st.subheader("Run history")
-        st.caption(f"Session runs: {len(st.session_state.history)}")
-        if st.button("Clear session history"):
+        st.markdown(f"**Session runs:** {len(st.session_state.history)}")
+        if st.button("Clear history"):
             st.session_state.history = []
             st.rerun()
 
-    # Header
-    st.title("Finance Analyst Terminal")
-    dynamic_fiscal_years = _available_fiscal_years(base_dir)
+        if st.session_state.history:
+            st.markdown("**Recent queries**")
+            for i, rec in enumerate(st.session_state.history[:5]):
+                st.caption(f"{i+1}. {rec.get('question','')[:50]}")
 
-    # Top control section (requested flow)
-    st.subheader("Controls")
+    # ── Sticky Header ────────────────────────────────────
+    crumb = (st.session_state.history[0].get("question", "") if st.session_state.history else "")
+    render_header(hc, gemini_ok, crumb)
+
+    # ── Document Preview Drawer ──────────────────────────
+    if st.session_state.get("show_drawer"):
+        render_document_drawer()
+
+    # ── Query Zone ───────────────────────────────────────
+    dynamic_fy = _available_fiscal_years(base_dir)
+
+    st.markdown('<div class="fin-query-zone">', unsafe_allow_html=True)
+    st.markdown('<div class="fin-query-title">Financial Intelligence Query</div>', unsafe_allow_html=True)
+
     c_ticker, c_mode, c_fy, c_strict = st.columns([2, 3, 2, 3])
     with c_ticker:
-        ticker_options = ["(auto)"] + UI_TICKERS if UI_TICKERS else ["(auto)"]
-        ticker_choice = st.selectbox("Ticker", ticker_options, index=0)
+        ticker_opts  = ["(auto)"] + UI_TICKERS if UI_TICKERS else ["(auto)"]
+        ticker_choice = st.selectbox("Ticker", ticker_opts, index=0, key="sel_ticker")
         ticker = None if ticker_choice == "(auto)" else ticker_choice
     with c_mode:
-        mode = st.selectbox("Mode", ALL_MODES, index=0)
+        mode = st.selectbox("Mode", ALL_MODES, index=0, key="sel_mode")
     with c_fy:
-        fy_options = ["(auto)"] + [str(y) for y in dynamic_fiscal_years] if dynamic_fiscal_years else ["(auto)"]
-        fy_choice = st.selectbox("Fiscal year", fy_options, index=0)
+        fy_opts  = ["(auto)"] + [str(y) for y in dynamic_fy] if dynamic_fy else ["(auto)"]
+        fy_choice = st.selectbox("Fiscal Year", fy_opts, index=0, key="sel_fy")
         fiscal_year = None if fy_choice == "(auto)" else int(fy_choice)
     with c_strict:
-        strictness = st.slider("Evidence strictness", 0, 100, 70, 1)
+        strictness = st.slider("Evidence Strictness", 0, 100, 70, 1, key="slider_strict")
 
-    # Query input row
-    col_q, col_run = st.columns([7, 1])
+    col_q, col_run = st.columns([8, 1])
     with col_q:
-        question = st.text_input("Query", value="", placeholder="e.g., What was AAPL EPS in FY2024?")
+        question = st.text_input(
+            "Query",
+            value="",
+            placeholder="e.g.  What was AAPL EPS in FY2024?  ·  Compare MSFT and GOOGL revenue growth  ·  AAPL risk factors",
+            label_visibility="collapsed",
+            key="query_input",
+        )
     with col_run:
-        run = st.button("Run", use_container_width=True)
+        run = st.button("Run →", use_container_width=True, key="run_btn")
 
-    # Initialize orchestrator lazily so health can show even if key missing
+    st.markdown("</div>", unsafe_allow_html=True)  # fin-query-zone
+
+    # ── Orchestrator ─────────────────────────────────────
     try:
         orch = get_orchestrator()
     except Exception as e:
         st.error(f"Orchestrator init failed: {type(e).__name__}: {e}")
         st.stop()
 
-    # Execute
+    # ── Execute ──────────────────────────────────────────
     if run:
         if not isinstance(question, str) or not question.strip():
-            st.warning("Enter a query.")
+            st.warning("Please enter a query before clicking Run.")
         else:
-            # Pass controls as structured hints to avoid polluting planner text.
             forced_mode = None if mode == "auto" else mode
             query = question.strip()
-
             t0 = time.time()
-            try:
-                result = orch.answer(
-                    query,
-                    market_inputs=None,
-                    auto_fetch_market=True,
-                    forced_mode=forced_mode,
-                    ui_intent=mode,
-                    ui_ticker=ticker,
-                    ui_fiscal_year=fiscal_year,
-                    evidence_strictness=strictness,
-                )
-                latency_s = time.time() - t0
-            except TypeError as e:
-                # Streamlit can keep a stale cached orchestrator instance across edits.
-                # If the old instance doesn't support new kwargs, clear cache and retry once.
-                if "unexpected keyword argument" in str(e):
-                    get_orchestrator.clear()
-                    orch = get_orchestrator()
+
+            # Execution trace — visible only while running, collapses on completion
+            with st.status("Running financial analysis pipeline…", expanded=True) as status:
+                st.write("**Planning** — classifying query, identifying entities…")
+                try:
                     result = orch.answer(
                         query,
                         market_inputs=None,
@@ -313,238 +1402,116 @@ def main():
                         ui_fiscal_year=fiscal_year,
                         evidence_strictness=strictness,
                     )
-                    latency_s = time.time() - t0
-                else:
+                except TypeError as e:
+                    if "unexpected keyword argument" in str(e):
+                        get_orchestrator.clear()
+                        orch = get_orchestrator()
+                        result = orch.answer(
+                            query,
+                            market_inputs=None,
+                            auto_fetch_market=True,
+                            forced_mode=forced_mode,
+                            ui_intent=mode,
+                            ui_ticker=ticker,
+                            ui_fiscal_year=fiscal_year,
+                            evidence_strictness=strictness,
+                        )
+                    else:
+                        status.update(label="Analysis failed", state="error")
+                        st.error(f"Request failed: {type(e).__name__}: {e}")
+                        st.stop()
+                except Exception as e:
+                    status.update(label="Analysis failed", state="error")
                     st.error(f"Request failed: {type(e).__name__}: {e}")
                     st.stop()
-            except Exception as e:
-                st.error(f"Request failed: {type(e).__name__}: {e}")
-                st.stop()
 
-            # Normalize for UI
-            routing = result.get("routing", {}) or {}
-            gate = result.get("gate", {}) or {}
-            action = result.get("action", "abstain")
+                latency_s = round(time.time() - t0, 2)
+
+                # Summary inside trace
+                r_obj    = result.get("routing", {}) or {}
+                v_obj    = result.get("verification", {}) or {}
+                tm_obj   = result.get("timing_ms", {}) or {}
+                det_mode = result.get("mode", "?")
+                det_mdl  = r_obj.get("model", "?")
+                det_gate = v_obj.get("status", "?")
+
+                st.write(
+                    f"**Retrieval & Verification** — mode: `{det_mode}` · model: `{det_mdl}` "
+                    f"· gate: `{det_gate}`"
+                )
+                if tm_obj:
+                    parts = " · ".join(f"{k}: {v}ms" for k, v in tm_obj.items())
+                    st.write(f"**Timing** — {parts}")
+
+                status.update(
+                    label=f"Analysis complete — {latency_s}s  ·  mode: {det_mode}  ·  {det_gate}",
+                    state="complete",
+                    expanded=False,
+                )
+
+            # ── Store result ──
+            routing  = result.get("routing", {}) or {}
+            gate     = result.get("gate", {}) or {}
+            action   = result.get("action", "abstain")
             final_answer = _extract_final_answer(result)
             evidence = _flatten_evidence(result)
-            packed_context = result.get("packed_context", "") or ""
-            if not isinstance(packed_context, str):
-                packed_context = str(packed_context)
+            packed_ctx   = result.get("packed_context", "") or ""
+            if not isinstance(packed_ctx, str):
+                packed_ctx = str(packed_ctx)
 
-            record = {
-                "ts": int(time.time()),
-                "question": question.strip(),
-                "ticker": ticker,
-                "mode": mode,
-                "fiscal_year": fiscal_year,
-                "strictness": strictness,
-                "run_id": result.get("run_id", "—"),
-                "action": action,
-                "latency_s": round(latency_s, 2),
-                "routing": routing,
-                "gate": gate,
+            st.session_state.history.insert(0, {
+                "ts":           int(time.time()),
+                "question":     question.strip(),
+                "ticker":       ticker,
+                "mode":         mode,
+                "fiscal_year":  fiscal_year,
+                "strictness":   strictness,
+                "run_id":       result.get("run_id", "—"),
+                "action":       action,
+                "latency_s":    latency_s,
+                "routing":      routing,
+                "gate":         gate,
                 "final_answer": final_answer,
-                "evidence": evidence,
-                "packed_context": packed_context,
-                "raw": result,
-            }
-            st.session_state.history.insert(0, record)
-
-    # Show latest (if any)
-    if st.session_state.history:
-        r = st.session_state.history[0]
-
-        # KPI row
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Run ID", r["run_id"])
-        c2.metric("Action", r["action"])
-        c3.metric("Model", (r["routing"] or {}).get("model", "—"))
-        c4.metric("Gate score", (r["gate"] or {}).get("score", "—"))
-        c5.metric("Latency (s)", r["latency_s"])
-
-        # Answer + Signal panel (unified)
-        st.markdown('<div class="term-panel">', unsafe_allow_html=True)
-        st.markdown(
-            f'<span class="term-badge">ticker={(r.get("ticker") or "—")}</span>'
-            f'<span class="term-badge">mode={r["mode"]}</span>'
-            f'<span class="term-badge">fy={(r.get("fiscal_year") or "—")}</span>'
-            f'<span class="term-badge">strict={r["strictness"]}</span>'
-            f'<span class="term-badge">router_mode={(r["routing"] or {}).get("mode","—")}</span>',
-            unsafe_allow_html=True
-        )
-        st.subheader("Answer")
-        st.write(r["final_answer"])
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # Signal Dashboard rendered inline after the answer
-        raw = r.get("raw", {}) or {}
-        if raw.get("hackathon_signal_report"):
-            render_signal_inline(raw)
-
-        # Evidence Explorer
-        st.subheader("Evidence Explorer")
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Top Chunks", "Tables", "XBRL Facts", "Packed Context", "Audit Trace"])
-
-        with tab1:
-            narr = (r["evidence"] or {}).get("narrative", {}) or {}
-            records = narr.get("records", []) or []
-            if not records:
-                st.info("No narrative chunks returned.")
-            else:
-                for i, rec in enumerate(records[:20], 1):
-                    title = rec.get("doc_title") or rec.get("source") or f"Chunk {i}"
-                    with st.expander(f"{i}. {title}", expanded=(i <= 3)):
-                        st.caption(rec.get("source_url") or rec.get("url") or "")
-                        st.code((rec.get("text") or "")[:4000])
-
-        with tab2:
-            tables = (r["evidence"] or {}).get("tables", {}) or {}
-            trecs = tables.get("records", []) or []
-            if not trecs:
-                st.info("No tables returned.")
-            else:
-                for i, rec in enumerate(trecs[:20], 1):
-                    title = rec.get("title") or rec.get("doc_title") or f"Table {i}"
-                    with st.expander(f"{i}. {title}", expanded=(i <= 2)):
-                        st.caption(rec.get("source_url") or rec.get("url") or "")
-                        st.code((rec.get("text") or "")[:6000])
-
-        with tab3:
-            xbrl = (r["evidence"] or {}).get("xbrl", {}) or {}
-            facts = xbrl.get("facts", []) or []
-            if not facts:
-                st.info("No XBRL facts returned.")
-            else:
-                st.json(facts[:200])
-
-        with tab4:
-            pc = r.get("packed_context", "") or ""
-            if not pc.strip():
-                st.info("No packed context.")
-            else:
-                st.code(pc[:20000])
-                st.download_button(
-                    "Download packed_context.txt",
-                    data=pc.encode("utf-8"),
-                    file_name=f"packed_context_{r['run_id']}.txt",
-                    mime="text/plain",
-                )
-
-        with tab5:
-            st.json({
-                "routing": _safe_to_dict(r.get("routing", {})),
-                "gate": _safe_to_dict(r.get("gate", {})),
-                "validation_errors": r.get("raw", {}).get("validation_errors", []),
+                "evidence":     evidence,
+                "packed_context": packed_ctx,
+                "raw":          result,
             })
-            # Tail audit log
-            audit_path = base_dir / "logs" / "audit.jsonl"
-            audit_tail = _read_audit_log(audit_path, tail=200)
-            if audit_tail.strip():
-                st.caption("audit.jsonl (tail)")
-                st.code(audit_tail)
-                st.download_button(
-                    "Download full audit.jsonl",
-                    data=audit_path.read_bytes() if audit_path.exists() else b"",
-                    file_name="audit.jsonl",
-                    mime="application/json",
-                )
 
-    else:
-        st.info("No runs yet. Enter a query and click Run.")
+    # ── Results ──────────────────────────────────────────
+    if st.session_state.history:
+        r   = st.session_state.history[0]
+        raw = r.get("raw", {}) or {}
 
-def render_signal_inline(resp: Dict[str, Any]) -> None:
-    """Render signal layer output as part of the main answer flow."""
-    report = resp.get("hackathon_signal_report") or {}
-    score = resp.get("hackathon_signal_score") or {}
+        st.markdown("<hr style='border-color:var(--border);margin:0.5rem 0 1rem'>", unsafe_allow_html=True)
 
-    if not report:
-        return
+        # Answer (with sticky summary bar)
+        render_answer_section(r)
 
-    st.markdown("---")
-    st.subheader("Investment Signal")
+        # Investment signals
+        if raw.get("hackathon_signal_report"):
+            render_signal_section(raw)
 
-    rec = report.get("recommendation", "N/A")
-    rec_colors = {"BUY": "green", "HOLD": "orange", "CAUTIOUS": "orange", "AVOID": "red"}
-    rec_color = rec_colors.get(rec, "gray")
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
+        # Evidence explorer
         st.markdown(
-            f'<div class="term-kpi"><b>Recommendation</b><br>'
-            f'<span style="color:{rec_color};font-size:1.4em;font-weight:bold">{rec}</span></div>',
+            '<div class="fin-section-label" style="margin-top:1.5rem;margin-bottom:4px">Evidence Explorer</div>',
             unsafe_allow_html=True,
         )
-    with c2:
-        strength = float(report.get("signal_strength", 0.0))
-        st.metric("Signal Strength", f"{strength:+.2f}")
-    with c3:
-        confidence = float(report.get("confidence", 0.0))
-        st.metric("Confidence", f"{confidence:.0%}")
-    with c4:
-        comp = score.get("component_scores", {})
-        dominant = max(comp, key=lambda k: abs(comp[k])) if comp else "—"
-        st.metric("Dominant Factor", dominant.title())
+        render_evidence_tabs(r, base_dir)
 
-    comp = score.get("component_scores", {})
-    if comp:
-        cols = st.columns(len(comp))
-        for col, (k, v) in zip(cols, comp.items()):
-            bar_color = "green" if v > 0 else "red" if v < 0 else "gray"
-            col.markdown(
-                f'<div class="term-kpi" style="text-align:center">'
-                f'<span class="term-muted" style="font-size:0.8em">{k.upper()}</span><br>'
-                f'<span style="color:{bar_color};font-size:1.2em;font-weight:bold">{v:+.2f}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+        # Why this answer
+        render_reasoning_panel(r)
 
-    left, right = st.columns([3, 2])
+    else:
+        # Empty state
+        st.markdown(
+            _EMPTY_HTML.format(
+                icon="⬡",
+                title="No queries yet",
+                sub="Enter a financial question above and click Run → to analyse SEC filings, earnings transcripts, and market data",
+            ),
+            unsafe_allow_html=True,
+        )
 
-    with left:
-        findings = report.get("key_findings", [])
-        if findings:
-            st.markdown("**Key Findings**")
-            for f in findings:
-                st.write(f"- {f}")
 
-        risks = report.get("top_risks", [])
-        if risks:
-            st.markdown("**Top Risks**")
-            for risk in risks[:5]:
-                st.write(
-                    f"- **{risk.get('category')}** — severity: {risk.get('severity')} | count: {risk.get('count')}"
-                )
-                for s in (risk.get("snippets") or [])[:2]:
-                    st.caption(s)
-
-    with right:
-        tone = report.get("tone_trend", {})
-        if tone and tone.get("direction"):
-            st.markdown("**Tone Trend**")
-            direction = tone.get("direction", "flat")
-            delta = tone.get("delta", 0.0)
-            arrow = {"improving": "arrow_up", "worsening": "arrow_down"}.get(direction, "left_right_arrow")
-            st.write(f":{arrow}: {direction.title()} (delta: {delta:+.2f})")
-
-        val = report.get("valuation_summary", {})
-        gap = val.get("valuation_gap_pct")
-        growth = val.get("revenue_growth_yoy")
-        if gap is not None or growth is not None:
-            st.markdown("**Valuation**")
-            if gap is not None:
-                st.write(f"- Valuation gap: {gap:+.1%}")
-            if growth is not None:
-                st.write(f"- Revenue growth YoY: {growth:+.1%}")
-
-        news = report.get("news_summary", [])
-        if news:
-            st.markdown("**Recent Catalysts**")
-            for n in news[:5]:
-                direction = n.get("direction", "neutral")
-                icon = {"positive": ":green_circle:", "negative": ":red_circle:"}.get(direction, ":white_circle:")
-                st.write(f"{icon} {n.get('title', '')}")
-
-    with st.expander("Full Analyst Report (Markdown)"):
-        st.markdown(resp.get("hackathon_signal_markdown", ""))
 if __name__ == "__main__":
     main()

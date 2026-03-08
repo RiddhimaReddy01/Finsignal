@@ -60,6 +60,46 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================================
+# Embedding cache
+# ============================================================
+
+class _CachedEmbedder:
+    """
+    Thin wrapper around SentenceTransformer that caches single-query encodes.
+
+    Repeated calls with the same query string return the cached numpy array
+    without invoking the model. Multi-query batches always run the model.
+
+    max_size: maximum number of cached query vectors (LRU eviction).
+    """
+
+    def __init__(self, model: SentenceTransformer, max_size: int = 512):
+        self._model = model
+        self._cache: Dict[str, np.ndarray] = {}
+        self._order: List[str] = []
+        self._max_size = max_size
+
+    def encode(self, texts: List[str], **kwargs) -> np.ndarray:
+        if len(texts) == 1:
+            key = texts[0]
+            if key in self._cache:
+                return self._cache[key][np.newaxis, :].copy()
+            result: np.ndarray = self._model.encode(texts, **kwargs)
+            # evict oldest if at capacity
+            if len(self._order) >= self._max_size:
+                oldest = self._order.pop(0)
+                self._cache.pop(oldest, None)
+            self._cache[key] = result[0].copy()
+            self._order.append(key)
+            return result
+        return self._model.encode(texts, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._model, name)
+
+
 # ============================================================
 # Utils
 # ============================================================
@@ -693,7 +733,7 @@ class FinancialRetrievalTool:
 
         self.n_faiss = faiss.read_index(str(narrative_faiss_path))
         logger.info("Loading embedding model: %s", embed_model)
-        self.embedder = SentenceTransformer(embed_model)
+        self.embedder = _CachedEmbedder(SentenceTransformer(embed_model))
 
         # --- FAISS id mapping ---
         # Correct mapping requires that faiss_ids list matches the order used to build the FAISS index.

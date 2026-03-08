@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import math
 import re
+import logging
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, BertTokenizer, pipeline
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_PRIMARY_FINBERT = "ProsusAI/finbert"
+DEFAULT_FALLBACK_TONE_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
 
 
 # ============================================================
@@ -53,7 +60,7 @@ class FinBERTToneAnalyzer:
     Finance-specific tone analyzer.
 
     Default model:
-      yiyanghkust/finbert-tone
+      ProsusAI/finbert
 
     Notes:
     - Runs on CPU by default if CUDA is not available.
@@ -62,14 +69,22 @@ class FinBERTToneAnalyzer:
 
     def __init__(
         self,
-        model_name: str = "yiyanghkust/finbert-tone",
+        model_name: str = DEFAULT_PRIMARY_FINBERT,
         device: Optional[int] = None,
         max_chars: int = 3500,
     ):
         self.model_name = model_name
         self.max_chars = max_chars
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Some Windows/offline environments cannot build the fast tokenizer backend.
+        # Fall back to slow tokenizer to keep the signal layer functional.
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        except Exception:
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
+            except Exception:
+                self.tokenizer = BertTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
 
         if device is None:
@@ -133,12 +148,38 @@ class FinBERTToneAnalyzer:
         )
 
 
+@lru_cache(maxsize=4)
+def get_tone_analyzer(model_name: str) -> FinBERTToneAnalyzer:
+    return FinBERTToneAnalyzer(model_name=model_name)
+
+
 @lru_cache(maxsize=1)
 def get_default_tone_analyzer() -> FinBERTToneAnalyzer:
     """
     Shared singleton-style analyzer to avoid reloading model repeatedly.
+    Tries a prioritized model list and returns the first loadable analyzer.
     """
-    return FinBERTToneAnalyzer()
+    configured = str(os.environ.get("FINBERT_MODEL_CANDIDATES", "")).strip()
+    candidates = [
+        x.strip() for x in configured.split(",") if x.strip()
+    ] or [
+        DEFAULT_PRIMARY_FINBERT,
+        "yiyanghkust/finbert-tone",
+        DEFAULT_FALLBACK_TONE_MODEL,
+    ]
+
+    errs: List[str] = []
+    for m in candidates:
+        try:
+            analyzer = get_tone_analyzer(m)
+            logger.info("Loaded tone model: %s", m)
+            return analyzer
+        except Exception as e:
+            errs.append(f"{m}:{type(e).__name__}")
+            logger.warning("Tone model load failed for %s (%s)", m, e)
+            continue
+
+    raise RuntimeError("all tone models failed: " + " | ".join(errs))
 
 
 # ============================================================

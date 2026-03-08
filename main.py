@@ -24,6 +24,7 @@ _load_dotenv()
 
 from local_llm import build_local_llm_client, DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL
 from market_api import YahooFinanceMarketDataProvider
+from news_client_adapter import build_optional_news_client
 from orchestrator import FinancialOrchestrator, OrchestratorConfig
 
 try:
@@ -55,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--small-model", type=str, default=os.environ.get("LOCAL_SMALL_MODEL", "small"))
     p.add_argument("--large-model", type=str, default=os.environ.get("LOCAL_LARGE_MODEL", "large"))
     p.add_argument("--fallback-model", type=str, default=os.environ.get("LOCAL_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL))
-    p.add_argument("--ollama-url", type=str, default=os.environ.get("OLLAMA_URL", "http://localhost:11434"))
+    p.add_argument("--gemini-url", type=str, default=os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"))
+    p.add_argument("--ollama-url", type=str, default=None, help=argparse.SUPPRESS)
     p.add_argument("--market-inputs", type=str, default=None, help='Optional JSON string: \'{"wacc":0.1,"terminal_growth":0.03}\'')
     p.add_argument("--known-tickers", type=str, default=os.environ.get("KNOWN_TICKERS"), help="Comma-separated known tickers.")
     p.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -92,9 +94,9 @@ def main() -> int:
             return 1
 
     llm_client = build_local_llm_client(
-        primary_model=os.environ.get("LOCAL_PRIMARY_QWEN_MODEL", DEFAULT_PRIMARY_MODEL),
-        fallback_model=os.environ.get("LOCAL_FALLBACK_MISTRAL_MODEL", DEFAULT_FALLBACK_MODEL),
-        base_url=args.ollama_url,
+        primary_model=os.environ.get("GEMINI_SMALL_MODEL", DEFAULT_PRIMARY_MODEL),
+        fallback_model=os.environ.get("GEMINI_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
+        base_url=args.gemini_url,
     )
 
     cfg = OrchestratorConfig(
@@ -104,6 +106,7 @@ def main() -> int:
         large_model_name=args.large_model,
         known_tickers=_parse_known_tickers(args.known_tickers) or _DEFAULT_KNOWN_TICKERS or None,
         market_provider=YahooFinanceMarketDataProvider(),
+        news_client=build_optional_news_client(),
     )
 
     orchestrator = FinancialOrchestrator(cfg=cfg, llm_client=llm_client)

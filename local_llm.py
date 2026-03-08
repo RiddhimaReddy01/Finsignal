@@ -1,107 +1,116 @@
 """
-local_llm.py
+Gemini-backed LLM client with cost-aware routing and fallback.
 
-Local LLM clients using Ollama for inference.
-Cost-aware defaults:
-  - Qwen for low-cost / faster paths
-  - Mistral for higher-quality / complex paths
-with automatic fallback between them.
+Keeps the existing app-facing interface:
+  - build_local_llm_client(...)
+  - client.generate_json(system_prompt=..., user_prompt=..., model_name=...)
 """
 from __future__ import annotations
 
-import ctypes
 import json
 import logging
 import os
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Deque, Dict, Optional, Tuple
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_QWEN_MODEL = "qwen2.5:1.5b"
-DEFAULT_MISTRAL_MODEL = "mistral:7b"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-# Backward-compatible aliases
-DEFAULT_PRIMARY_MODEL = DEFAULT_QWEN_MODEL
-DEFAULT_FALLBACK_MODEL = DEFAULT_MISTRAL_MODEL
+DEFAULT_SMALL_MODEL = "gemini-2.5-flash"
+DEFAULT_LARGE_MODEL = "gemini-2.5-flash"
+DEFAULT_FALLBACK_MODEL = "gemini-2.5-flash"
+DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
+
+# Backward-compatible aliases consumed by main.py / userinterface.py.
+DEFAULT_PRIMARY_MODEL = DEFAULT_SMALL_MODEL
 
 
 @dataclass(frozen=True)
-class HardwareProfile:
-    cpu_cores: int
-    ram_gb: Optional[float]
+class RateLimits:
+    rpm: int = 5
+    tpm: int = 250_000
+    rpd: int = 20
 
 
-def _detect_ram_gb() -> Optional[float]:
-    try:
-        if os.name == "nt":
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
+class _RateLimiter:
+    """Simple in-process limiter for RPM/TPM/RPD."""
 
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-            return float(stat.ullTotalPhys) / (1024.0 ** 3)
-    except Exception:
-        return None
-    return None
+    def __init__(self, limits: RateLimits):
+        self._limits = limits
+        self._lock = threading.Lock()
+        self._req_ts: Deque[float] = deque()
+        self._tok_ts: Deque[Tuple[float, int]] = deque()
+        self._day_start = time.time()
+        self._day_count = 0
+
+    def _prune(self, now: float) -> None:
+        minute_ago = now - 60.0
+        while self._req_ts and self._req_ts[0] < minute_ago:
+            self._req_ts.popleft()
+        while self._tok_ts and self._tok_ts[0][0] < minute_ago:
+            self._tok_ts.popleft()
+        if now - self._day_start >= 86_400:
+            self._day_start = now
+            self._day_count = 0
+
+    def _minute_tokens(self) -> int:
+        return sum(toks for _, toks in self._tok_ts)
+
+    def acquire(self, estimated_tokens: int) -> None:
+        estimated = max(1, int(estimated_tokens))
+        while True:
+            with self._lock:
+                now = time.time()
+                self._prune(now)
+
+                if self._day_count >= self._limits.rpd:
+                    raise RuntimeError("Gemini daily request limit reached (RPD).")
+
+                req_wait = 0.0
+                tok_wait = 0.0
+
+                if len(self._req_ts) >= self._limits.rpm:
+                    req_wait = max(0.0, 60.0 - (now - self._req_ts[0]))
+
+                if self._minute_tokens() + estimated > self._limits.tpm and self._tok_ts:
+                    tok_wait = max(0.0, 60.0 - (now - self._tok_ts[0][0]))
+
+                wait_s = max(req_wait, tok_wait)
+                if wait_s <= 0:
+                    self._req_ts.append(now)
+                    self._tok_ts.append((now, estimated))
+                    self._day_count += 1
+                    return
+
+            time.sleep(min(wait_s, 1.0))
 
 
-def detect_hardware_profile() -> HardwareProfile:
-    return HardwareProfile(
-        cpu_cores=max(1, int(os.cpu_count() or 1)),
-        ram_gb=_detect_ram_gb(),
-    )
+def _rough_token_estimate(text: str) -> int:
+    # ~4 chars/token heuristic.
+    return max(1, int(len(text or "") / 4))
 
 
-class OllamaLLMClient:
-    """LLM client that talks to a local Ollama server."""
-
+class GeminiLLMClient:
     def __init__(
         self,
-        model_name: str = DEFAULT_PRIMARY_MODEL,
-        base_url: str = DEFAULT_OLLAMA_URL,
-        timeout_s: int = 300,
+        *,
+        model_name: str,
+        api_key: str,
+        base_url: str = DEFAULT_BASE_URL,
+        timeout_s: int = 120,
+        limits: Optional[RateLimits] = None,
     ):
         self.model_name = model_name
+        self.api_key = (api_key or "").strip()
         self.base_url = base_url.rstrip("/")
-        self.timeout_s = timeout_s
-
-    def _check_server(self) -> bool:
-        try:
-            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            return resp.status_code == 200
-        except Exception:
-            return False
-
-    def _list_local_models(self) -> List[str]:
-        try:
-            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            resp.raise_for_status()
-            data = resp.json() or {}
-            models = data.get("models") or []
-            out: List[str] = []
-            for m in models:
-                if isinstance(m, dict):
-                    name = str(m.get("name") or "").strip()
-                    if name:
-                        out.append(name)
-            return out
-        except Exception:
-            return []
+        self.timeout_s = int(timeout_s)
+        self.limiter = _RateLimiter(limits or RateLimits())
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is not set.")
 
     def generate_json(
         self,
@@ -110,178 +119,85 @@ class OllamaLLMClient:
         user_prompt: str,
         model_name: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        selected_model = model_name or self.model_name
+        selected = (model_name or self.model_name).strip()
+        prompt = f"{system_prompt}\n\n{user_prompt}"
+        self.limiter.acquire(_rough_token_estimate(prompt))
 
+        url = f"{self.base_url}/v1beta/models/{selected}:generateContent"
+        params = {"key": self.api_key}
         payload = {
-            "model": selected_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "stream": False,
-            "format": "json",
-            "options": {
+            "systemInstruction": {"role": "system", "parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {
                 "temperature": 0.1,
-                "num_ctx": 4096,
+                "responseMimeType": "application/json",
             },
         }
 
-        for attempt in range(3):
-            try:
-                resp = requests.post(
-                    f"{self.base_url}/api/chat",
-                    json=payload,
-                    timeout=self.timeout_s,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+        resp = requests.post(url, params=params, json=payload, timeout=self.timeout_s)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Gemini API error {resp.status_code}: {resp.text[:300]}")
 
-                text = data.get("message", {}).get("content", "")
+        data = resp.json() or {}
+        cands = data.get("candidates") or []
+        text = ""
+        if cands:
+            parts = ((cands[0].get("content") or {}).get("parts") or [])
+            text = "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict))
+        if not text.strip():
+            raise RuntimeError("Gemini returned empty content.")
 
-                prompt_tokens = data.get("prompt_eval_count") or 0
-                completion_tokens = data.get("eval_count") or 0
-                usage: Dict[str, Any] = {
-                    "input_tokens": prompt_tokens or None,
-                    "output_tokens": completion_tokens or None,
-                    "total_tokens": (prompt_tokens + completion_tokens) or None,
-                    "cost_usd": 0.0,
-                    "model": selected_model,
-                    "local": True,
-                }
-                return text, usage
-
-            except requests.exceptions.ConnectionError:
-                raise RuntimeError(
-                    f"Cannot connect to Ollama at {self.base_url}. "
-                    "Make sure Ollama is running: 'ollama serve'"
-                )
-            except requests.exceptions.Timeout:
-                if attempt < 2:
-                    logger.warning(
-                        "Ollama timeout (attempt %d/3) for model %s",
-                        attempt + 1,
-                        selected_model,
-                    )
-                    time.sleep(2)
-                    continue
-                raise RuntimeError(
-                    f"Ollama timed out after {self.timeout_s}s for model {selected_model}"
-                )
-            except requests.exceptions.HTTPError as exc:
-                status = getattr(exc.response, "status_code", None)
-                if status == 404:
-                    raise RuntimeError(
-                        f"Model '{selected_model}' not found in Ollama. "
-                        f"Pull it first: 'ollama pull {selected_model}'"
-                    ) from exc
-                raise
-
-        raise RuntimeError(f"Ollama generation failed after 3 attempts for {selected_model}")
+        usage_meta = data.get("usageMetadata") or {}
+        usage: Dict[str, Any] = {
+            "input_tokens": usage_meta.get("promptTokenCount"),
+            "output_tokens": usage_meta.get("candidatesTokenCount"),
+            "total_tokens": usage_meta.get("totalTokenCount"),
+            "model": selected,
+            "provider": "gemini",
+        }
+        return text, usage
 
 
-class FallbackLocalLLMClient:
-    """Tries primary model first; falls back to secondary on failure."""
+class CostRouterGeminiLLMClient:
+    """Model router with small/large choice and fallback on failure."""
 
     def __init__(
         self,
-        primary: OllamaLLMClient,
-        fallback: Optional[OllamaLLMClient] = None,
-    ):
-        self.primary = primary
-        self.fallback = fallback
-
-    def generate_json(
-        self,
         *,
-        system_prompt: str,
-        user_prompt: str,
-        model_name: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        try:
-            return self.primary.generate_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model_name=model_name,
-            )
-        except Exception as exc:
-            if self.fallback is None:
-                raise
-            logger.warning(
-                "Primary model failed (%s); falling back to %s",
-                exc,
-                self.fallback.model_name,
-            )
-            return self.fallback.generate_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model_name=self.fallback.model_name,
-            )
-
-
-class CostRouterLocalLLMClient:
-    """
-    Hardware-aware cost router:
-      - prefers Qwen for low-cost/fast paths
-      - uses Mistral for harder prompts on capable hardware
-      - always falls back to the other model on failure
-    """
-
-    def __init__(
-        self,
-        qwen: OllamaLLMClient,
-        mistral: OllamaLLMClient,
-        *,
-        prefer_low_cost: bool = True,
+        small_client: GeminiLLMClient,
+        large_client: GeminiLLMClient,
+        fallback_client: GeminiLLMClient,
     ):
-        self.qwen = qwen
-        self.mistral = mistral
-        self.prefer_low_cost = bool(prefer_low_cost)
-        self.hw = detect_hardware_profile()
-
-    def _is_low_resource(self) -> bool:
-        if self.hw.cpu_cores < 8:
-            return True
-        if self.hw.ram_gb is not None and self.hw.ram_gb < 16.0:
-            return True
-        return False
+        self.small_client = small_client
+        self.large_client = large_client
+        self.fallback_client = fallback_client
 
     def _is_complex(self, system_prompt: str, user_prompt: str) -> bool:
         txt = f"{system_prompt}\n{user_prompt}".lower()
-        if len(txt) > 6500:
+        if len(txt) > 6_500:
             return True
         hard_terms = (
             "valuation",
             "discounted cash flow",
-            "dcf",
-            "framework",
-            "comparative",
             "relative valuation",
+            "comparative",
             "risk analysis",
+            "framework",
         )
         return any(t in txt for t in hard_terms)
 
-    def _pick_route(self, model_name: str, system_prompt: str, user_prompt: str) -> Tuple[OllamaLLMClient, OllamaLLMClient, str]:
+    def _pick(self, model_name: str, system_prompt: str, user_prompt: str) -> Tuple[GeminiLLMClient, str]:
         req = (model_name or "auto").strip().lower()
-        # Explicit route hints used by orchestrator.
         if req == "small":
-            return self.qwen, self.mistral, "small->qwen"
+            return self.small_client, "small"
         if req == "large":
-            if self._is_low_resource():
-                return self.qwen, self.mistral, "large->qwen(low_resource)"
-            return self.mistral, self.qwen, "large->mistral"
+            return self.large_client, "large"
         if req in ("auto", ""):
-            complex_prompt = self._is_complex(system_prompt, user_prompt)
-            if complex_prompt and not self._is_low_resource():
-                return self.mistral, self.qwen, "auto->mistral(complex)"
-            return self.qwen, self.mistral, "auto->qwen"
-
-        # Explicit model name passed by caller.
-        if "mistral" in req:
-            return self.mistral, self.qwen, f"explicit->{model_name}"
-        if "qwen" in req:
-            return self.qwen, self.mistral, f"explicit->{model_name}"
-        # Unknown explicit name: try via qwen client first, then mistral client.
-        return self.qwen, self.mistral, f"explicit_unknown->{model_name}"
+            if self._is_complex(system_prompt, user_prompt):
+                return self.large_client, "auto->large"
+            return self.small_client, "auto->small"
+        # Explicit model name.
+        return self.small_client, f"explicit:{model_name}"
 
     def generate_json(
         self,
@@ -290,49 +206,71 @@ class CostRouterLocalLLMClient:
         user_prompt: str,
         model_name: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        primary, fallback, route_tag = self._pick_route(model_name, system_prompt, user_prompt)
+        primary, route = self._pick(model_name, system_prompt, user_prompt)
+        requested_model = model_name if model_name not in ("small", "large", "auto", "") else primary.model_name
         try:
             text, usage = primary.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                model_name=(model_name if model_name not in ("small", "large", "auto") else primary.model_name),
+                model_name=requested_model,
             )
             usage = dict(usage or {})
-            usage["route"] = route_tag
-            usage["hardware"] = {"cpu_cores": self.hw.cpu_cores, "ram_gb": self.hw.ram_gb}
+            usage["route"] = route
             return text, usage
         except Exception as exc:
-            logger.warning(
-                "Primary routed model failed (%s); fallback to %s",
-                exc,
-                fallback.model_name,
-            )
-            text, usage = fallback.generate_json(
+            logger.warning("Primary Gemini route failed (%s), falling back to %s", exc, self.fallback_client.model_name)
+            text, usage = self.fallback_client.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                model_name=fallback.model_name,
+                model_name=self.fallback_client.model_name,
             )
             usage = dict(usage or {})
-            usage["route"] = f"{route_tag}|fallback->{fallback.model_name}"
-            usage["hardware"] = {"cpu_cores": self.hw.cpu_cores, "ram_gb": self.hw.ram_gb}
+            usage["route"] = f"{route}|fallback:{self.fallback_client.model_name}"
             return text, usage
 
 
 def build_local_llm_client(
     *,
-    primary_model: str = DEFAULT_QWEN_MODEL,
-    fallback_model: str = DEFAULT_MISTRAL_MODEL,
-    base_url: str = DEFAULT_OLLAMA_URL,
-    timeout_s: int = 300,
-) -> CostRouterLocalLLMClient:
-    qwen = OllamaLLMClient(
-        model_name=primary_model,
-        base_url=base_url,
-        timeout_s=timeout_s,
+    primary_model: str = DEFAULT_SMALL_MODEL,
+    fallback_model: str = DEFAULT_FALLBACK_MODEL,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout_s: int = 120,
+) -> CostRouterGeminiLLMClient:
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    small_model = os.environ.get("GEMINI_SMALL_MODEL", primary_model or DEFAULT_SMALL_MODEL)
+    large_model = os.environ.get("GEMINI_LARGE_MODEL", DEFAULT_LARGE_MODEL)
+    fb_model = os.environ.get("GEMINI_FALLBACK_MODEL", fallback_model or DEFAULT_FALLBACK_MODEL)
+
+    limits = RateLimits(
+        rpm=int(os.environ.get("GEMINI_RPM", "5")),
+        tpm=int(os.environ.get("GEMINI_TPM", "250000")),
+        rpd=int(os.environ.get("GEMINI_RPD", "20")),
     )
-    mistral = OllamaLLMClient(
-        model_name=fallback_model,
-        base_url=base_url,
+
+    small = GeminiLLMClient(
+        model_name=small_model,
+        api_key=api_key,
+        base_url=os.environ.get("GEMINI_BASE_URL", base_url),
         timeout_s=timeout_s,
+        limits=limits,
     )
-    return CostRouterLocalLLMClient(qwen=qwen, mistral=mistral)
+    large = GeminiLLMClient(
+        model_name=large_model,
+        api_key=api_key,
+        base_url=os.environ.get("GEMINI_BASE_URL", base_url),
+        timeout_s=timeout_s,
+        limits=limits,
+    )
+    fallback = GeminiLLMClient(
+        model_name=fb_model,
+        api_key=api_key,
+        base_url=os.environ.get("GEMINI_BASE_URL", base_url),
+        timeout_s=timeout_s,
+        limits=limits,
+    )
+    return CostRouterGeminiLLMClient(
+        small_client=small,
+        large_client=large,
+        fallback_client=fallback,
+    )
