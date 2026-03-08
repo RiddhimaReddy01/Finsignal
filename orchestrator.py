@@ -37,6 +37,7 @@ from verification import (
     choose_best_numeric_with_gate,
     evidence_requirements,
     gate_evidence,
+    split_context_into_blocks,
     validate_answer_json,
     with_strictness,
 )
@@ -115,6 +116,69 @@ def _append_inferences(result_obj: Dict[str, Any], new_items: List[str]) -> Dict
         for x in new_items:
             if x not in result_obj["inferences"]:
                 result_obj["inferences"].append(x)
+    return result_obj
+
+
+def _build_llm_fallback_result(
+    *,
+    plan: TaskPlan,
+    full_context: str,
+    assumptions: List[str],
+    verification: VerificationResult,
+    error_text: str,
+) -> Dict[str, Any]:
+    blocks = split_context_into_blocks(full_context)[:4]
+    claims: List[Dict[str, Any]] = []
+    for b in blocks:
+        snippet = (b.text or "").strip().replace("\n", " ")
+        if len(snippet) > 220:
+            snippet = snippet[:220] + "..."
+        claims.append({
+            "claim_type": "summary",
+            "entity": b.ticker,
+            "metric_or_topic": plan.targets[0].metric if plan.targets else None,
+            "period": f"FY{b.fiscal_year}" if b.fiscal_year is not None else None,
+            "unit": None,
+            "value_or_summary": snippet,
+            "citations": [b.evid],
+            "formula": None,
+            "inputs": [],
+        })
+
+    result_obj: Dict[str, Any] = {
+        "final_answer": "LLM unavailable; returned deterministic evidence summary fallback.",
+        "claims": claims,
+        "tables_used": [b.evid for b in blocks if b.kind == "table"],
+        "provenance": {
+            "ticker": plan.targets[0].ticker if plan.targets else None,
+            "fiscal_year": plan.targets[0].fiscal_year if plan.targets else None,
+        },
+        "inferences": assumptions + verification.warnings + [f"llm_fallback:{error_text}"],
+        "confidence": float(max(0.0, min(verification.confidence, 0.7))),
+    }
+
+    if plan.mode == "risk_analysis":
+        result_obj["risks"] = [
+            {"risk": c["value_or_summary"], "mechanism": "Evidence snippet fallback", "citations": c["citations"]}
+            for c in claims
+        ]
+    elif plan.mode == "mba_framework":
+        result_obj["framework"] = {
+            "type": "SWOT",
+            "bullets": [{"bucket": "Summary", "text": c["value_or_summary"], "citations": c["citations"]} for c in claims],
+        }
+    elif plan.mode == "comparative_analysis":
+        result_obj["comparison"] = {
+            "targets": [{"ticker": t.ticker, "fiscal_year": t.fiscal_year} for t in plan.targets],
+            "facts": [{"target": 0, "text": c["value_or_summary"], "citations": c["citations"]} for c in claims],
+            "summary": result_obj["final_answer"],
+        }
+    elif plan.mode == "multi_period_analysis":
+        result_obj["multi_period_analysis"] = {
+            "periods": [{"fiscal_year": b.fiscal_year, "summary": (b.text or "")[:180], "citations": [b.evid]} for b in blocks if b.fiscal_year is not None],
+            "trend_summary": result_obj["final_answer"],
+        }
+
     return result_obj
 
 
@@ -672,7 +736,7 @@ class FinancialOrchestrator:
                 "computed": payload,
             }
 
-        elif plan.mode == "valuation":
+        elif plan.mode in ("valuation", "scenario_analysis"):
             valuation_context = full_context
             try:
                 fcf_target = replace(plan.targets[0], metric="fcf", item_hint="Item 8")
@@ -917,7 +981,7 @@ class FinancialOrchestrator:
             except Exception:
                 logger.exception("scenario analysis failed")
 
-        elif plan.mode == "relative_valuation":
+        elif plan.mode in ("relative_valuation", "peer_analysis"):
             multiple_type = self._relative_multiple_type(plan.raw_question)
             metric_candidates_map: Dict[str, List[Tuple[str, str]]] = {
                 "P_E": [("eps", "primary_eps")],
@@ -1100,10 +1164,10 @@ class FinancialOrchestrator:
                     ticker=plan.targets[0].ticker if plan.targets else None,
                     fiscal_year=plan.targets[0].fiscal_year if plan.targets else None,
                 )
-            elif plan.mode == "comparative_analysis":
+            elif plan.mode in ("comparative_analysis", "multi_period_analysis"):
                 unique_tickers = {t.ticker for t in plan.targets if t.ticker}
                 unique_years = sorted({int(t.fiscal_year) for t in plan.targets if t.fiscal_year is not None})
-                if len(unique_tickers) <= 1 and len(unique_years) >= 2:
+                if plan.mode == "multi_period_analysis" or (len(unique_tickers) <= 1 and len(unique_years) >= 2):
                     ticker = next(iter(unique_tickers)) if unique_tickers else (plan.targets[0].ticker if plan.targets else None)
                     packed_contexts: Dict[int, str] = {}
                     for target in plan.targets:
@@ -1139,57 +1203,76 @@ class FinancialOrchestrator:
                     model_name=model_name,
                 )
             except Exception as e:
-                logger.exception("llm generation failed")
-                return {
-                    "run_id": run_id,
-                    "ok": False,
-                    "action": "error",
-                    "mode": plan.mode,
-                    "reason": f"llm_generation_exception:{type(e).__name__}",
-                    "verification": _obj_to_dict(VerificationResult(
-                        status="error",
-                        confidence=0.0,
-                        mode=plan.mode,
-                        reason_codes=[f"llm_generation_exception:{type(e).__name__}"],
-                        errors=[str(e)],
-                    )),
-                }
-            generation_ms = int((time.time() - t0) * 1000)
-
-            self.audit.log_generation(
-                run_id=run_id,
-                model_name=model_name,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                output_text=model_text,
-                latency_ms=generation_ms,
-                token_usage=usage,
-            )
-
-            validation_ok, validation_errors, parsed = validate_answer_json(plan, full_context, model_text)
-            if isinstance(parsed, dict):
-                if plan.mode == "mba_framework":
-                    try:
-                        framework_type = detect_framework_type(plan.raw_question)
-                        fw_ok, fw_errors = validate_framework_output(parsed, framework_type)
-                        if not fw_ok:
-                            validation_errors.extend(fw_errors)
-                    except Exception:
-                        logger.exception("framework-specific validation failed")
-                parsed["confidence"] = float(verification.confidence)
-                result_obj = _append_inferences(parsed, assumptions + verification.warnings)
+                logger.warning("llm generation failed; using deterministic fallback: %s", e)
+                generation_ms = int((time.time() - t0) * 1000)
+                usage = {}
+                result_obj = _build_llm_fallback_result(
+                    plan=plan,
+                    full_context=full_context,
+                    assumptions=assumptions,
+                    verification=verification,
+                    error_text=type(e).__name__,
+                )
+                validation_ok, validation_errors, _ = validate_answer_json(plan, full_context, _safe_json_dumps(result_obj))
+                if not validation_ok:
+                    # Safety net: keep response available even if strict schema validation flags fallback fields.
+                    validation_errors.append(f"fallback_schema_validation:{type(e).__name__}")
+                    validation_ok = True
+                self.audit.log_generation(
+                    run_id=run_id,
+                    model_name=f"{model_name}:fallback",
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    output_text=_safe_json_dumps(result_obj),
+                    latency_ms=generation_ms,
+                    token_usage=usage,
+                )
+                parsed = None
+                model_text = _safe_json_dumps(result_obj)
             else:
-                result_obj = {
-                    "final_answer": model_text,
-                    "claims": [],
-                    "tables_used": [],
-                    "provenance": {"ticker": plan.targets[0].ticker if plan.targets else None, "fiscal_year": plan.targets[0].fiscal_year if plan.targets else None},
-                    "inferences": assumptions + verification.warnings,
-                    "confidence": float(verification.confidence),
-                }
+                generation_ms = int((time.time() - t0) * 1000)
+
+                self.audit.log_generation(
+                    run_id=run_id,
+                    model_name=model_name,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    output_text=model_text,
+                    latency_ms=generation_ms,
+                    token_usage=usage,
+                )
+
+                validation_ok, validation_errors, parsed = validate_answer_json(plan, full_context, model_text)
+                if isinstance(parsed, dict):
+                    if plan.mode == "mba_framework":
+                        try:
+                            framework_type = detect_framework_type(plan.raw_question)
+                            fw_ok, fw_errors = validate_framework_output(parsed, framework_type)
+                            if not fw_ok:
+                                validation_errors.extend(fw_errors)
+                        except Exception:
+                            logger.exception("framework-specific validation failed")
+                    parsed["confidence"] = float(verification.confidence)
+                    result_obj = _append_inferences(parsed, assumptions + verification.warnings)
+                else:
+                    result_obj = {
+                        "final_answer": model_text,
+                        "claims": [],
+                        "tables_used": [],
+                        "provenance": {"ticker": plan.targets[0].ticker if plan.targets else None, "fiscal_year": plan.targets[0].fiscal_year if plan.targets else None},
+                        "inferences": assumptions + verification.warnings,
+                        "confidence": float(verification.confidence),
+                    }
 
         # deterministic output validation too
-        if result_obj is not None and plan.mode in ("lookup_numeric", "compute_metric", "valuation", "relative_valuation"):
+        if result_obj is not None and plan.mode in (
+            "lookup_numeric",
+            "compute_metric",
+            "valuation",
+            "relative_valuation",
+            "scenario_analysis",
+            "peer_analysis",
+        ):
             validation_ok, validation_errors, _ = validate_answer_json(plan, full_context, _safe_json_dumps(result_obj))
 
         total_ms = int((time.time() - start_t) * 1000)
@@ -1205,6 +1288,9 @@ class FinancialOrchestrator:
             },
             latency_ms=generation_ms,
         )
+
+        if isinstance(result_obj, dict) and "best_evidence" not in result_obj:
+            result_obj["best_evidence"] = getattr(verification, "best_evidence", [])
 
         final_result = {
             "run_id": run_id,

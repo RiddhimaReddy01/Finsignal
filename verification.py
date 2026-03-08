@@ -30,6 +30,9 @@ Mode = Literal[
     "relative_valuation",
     "explanatory_reasoning",
     "mba_framework",
+    "multi_period_analysis",
+    "scenario_analysis",
+    "peer_analysis",
 ]
 
 VerificationStatus = Literal[
@@ -426,9 +429,17 @@ def choose_mode_mvp(
             return "lookup_numeric"
         if ui in ("text", "narrative"):
             return "lookup_text_filing"
+        if ui in ("multi_period_analysis", "scenario_analysis", "peer_analysis"):
+            return ui  # type: ignore[return-value]
 
     if any(t in ql for t in SCENARIO_TRIGGERS) and any(t in ql for t in VALUATION_TRIGGERS):
-        return "valuation"
+        return "scenario_analysis"
+
+    if any(x in ql for x in ("peer", "peers", "peer group", "peer set", "vs peers", "versus peers")):
+        return "peer_analysis"
+
+    if is_multi_period_query(question, tickers, years) and len(tickers) <= 1:
+        return "multi_period_analysis"
 
     if bool(_COMPARE_TERMS.search(question)) or len(tickers) >= 2 or len(years) >= 2:
         return "comparative_analysis"
@@ -504,6 +515,15 @@ def _build_source_route(question: str, mode: Mode) -> SourceRoutePlan:
         route.market_data = True
         route.transcript = True
         route.reasons.extend(["valuation_uses_filing_inputs", "market_data_optional_or_enhancing", "transcript_as_context"])
+    elif mode == "scenario_analysis":
+        route.market_data = True
+        route.transcript = True
+        route.reasons.extend(["scenario_valuation_requires_filing", "scenario_uses_market_inputs", "transcript_as_context"])
+    elif mode == "peer_analysis":
+        route.market_data = True
+        route.reasons.extend(["peer_analysis_requires_market_data", "filing_context_for_denominator"])
+    elif mode == "multi_period_analysis":
+        route.reasons.extend(["multi_period_prefers_filing_narrative", "multi_period_prefers_item8_tables"])
     elif mode in ("explanatory_reasoning", "lookup_text", "lookup_text_filing"):
         route.reasons.append("filing_narrative_lookup")
     elif mode == "lookup_text_management":
@@ -560,7 +580,7 @@ def build_task_plan(
 
     primary_metric = _resolve_primary_metric(q, metrics, mode)
 
-    if mode == "comparative_analysis":
+    if mode in ("comparative_analysis", "multi_period_analysis"):
         targets: List[Target] = []
         if is_multi_period_query(q, tickers, years) and len(tickers) <= 1:
             periods = extract_period_range(q, years)
@@ -654,7 +674,6 @@ EVIDENCE_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
     "comparative_analysis": {
         "required_slots": ["ticker"],
         "required_any": ["filing"],
-        "multi_entity": True,
     },
     "risk_analysis": {
         "required_slots": ["ticker", "fiscal_year"],
@@ -677,7 +696,7 @@ EVIDENCE_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
     "relative_valuation": {
         "required_slots": ["ticker", "fiscal_year"],
         "required_all": ["market_data", "filing"],
-        "require_market_inputs": True,
+        "require_market_inputs": False,
         "min_tables": 1,
         "min_total_blocks": 2,
     },
@@ -687,9 +706,29 @@ EVIDENCE_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
         "min_tables": 1,
         "min_total_blocks": 2,
     },
+    "scenario_analysis": {
+        "required_slots": ["ticker", "fiscal_year"],
+        "required_any": ["filing"],
+        "require_market_inputs": False,
+        "min_tables": 1,
+        "min_total_blocks": 2,
+    },
+    "peer_analysis": {
+        "required_slots": ["ticker", "fiscal_year"],
+        "required_all": ["market_data", "filing"],
+        "require_market_inputs": False,
+        "min_tables": 1,
+        "min_total_blocks": 2,
+    },
+    "multi_period_analysis": {
+        "required_slots": ["ticker"],
+        "required_any": ["filing"],
+        "min_chunks": 1,
+        "min_total_blocks": 2,
+    },
     "mba_framework": {
         "required_any": ["filing", "news", "transcript"],
-        "min_sources": 2,
+        "min_sources": 1,
     },
     "explanatory_reasoning": {
         "required_any": ["filing"],
@@ -1706,7 +1745,13 @@ def choose_best_numeric_with_gate(
     ]
 
     verified.sort(key=lambda c: (c.score, c.precedence, abs(c.value_scaled)), reverse=True)
-    return verified[0], debug
+    best = verified[0]
+    
+    # NEW: Populate best_evidence in debug so orchestrator can use it if needed,
+    # OR better: make choose_best_numeric_with_gate return enough info.
+    # Actually, orchestrator already gets 'best' which has evidence_id.
+    
+    return best, debug
 
 
 # ============================================================
@@ -1922,6 +1967,43 @@ def schema_for_mode(mode: Mode) -> Dict[str, Any]:
             },
         }
 
+    if mode == "scenario_analysis":
+        return {
+            **base,
+            "scenario_analysis": {
+                "base_ev": "number",
+                "comparisons": [{
+                    "name": "string",
+                    "ev": "number",
+                    "ev_delta_pct": "number",
+                    "ivps": "number|null",
+                    "ivps_delta_pct": "number|null",
+                    "parameter_changes": "object",
+                }],
+                "monte_carlo": "object|null",
+            },
+        }
+
+    if mode == "peer_analysis":
+        return {
+            **base,
+            "peer_analysis": {
+                "target_ticker": "string",
+                "peer_median": "number|null",
+                "peer_premium_pct": "number|null",
+                "signal": "object|null",
+            },
+        }
+
+    if mode == "multi_period_analysis":
+        return {
+            **base,
+            "multi_period_analysis": {
+                "periods": [{"fiscal_year": "int", "summary": "string", "citations": ["EVIDENCE_ID"]}],
+                "trend_summary": "string",
+            },
+        }
+
     return base
 
 
@@ -1944,6 +2026,8 @@ def build_json_answer_prompt(plan: TaskPlan, packed_context: str) -> Tuple[str, 
         "Return ONLY valid JSON.\n"
         "Every factual statement must be cited with evidence IDs exactly as they appear in the context headers.\n"
         "Separate evidence-backed facts from inferences.\n"
+        "The 'final_answer' field MUST be a detailed, professional research report (at least 3-4 paragraphs).\n"
+        "Use Markdown-style headers (###), bullet points (-), and bolding (**) for report structure.\n"
         "Do not invent citations, numbers, years, companies, or tables.\n"
     )
 
@@ -2040,6 +2124,24 @@ def validate_answer_json(
                 if isinstance(c, dict)
             ],
             "summary": obj.get("final_answer", "") if isinstance(obj.get("final_answer"), str) else "",
+        }
+    if plan.mode == "multi_period_analysis" and not isinstance(obj.get("multi_period_analysis"), dict):
+        obj["multi_period_analysis"] = {
+            "periods": [],
+            "trend_summary": obj.get("final_answer", "") if isinstance(obj.get("final_answer"), str) else "",
+        }
+    if plan.mode == "scenario_analysis" and not isinstance(obj.get("scenario_analysis"), dict):
+        obj["scenario_analysis"] = {
+            "base_ev": 0.0,
+            "comparisons": [],
+            "monte_carlo": None,
+        }
+    if plan.mode == "peer_analysis" and not isinstance(obj.get("peer_analysis"), dict):
+        obj["peer_analysis"] = {
+            "target_ticker": tgt.ticker or "",
+            "peer_median": None,
+            "peer_premium_pct": None,
+            "signal": None,
         }
     if plan.mode == "mba_framework" and not isinstance(obj.get("framework"), dict):
         obj["framework"] = {

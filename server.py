@@ -83,6 +83,102 @@ class AnalyzeRequest(BaseModel):
     mode: str = "auto"
     strictness: int = 70
 
+# --- Global Helper for Hydration ---
+def hydrate_ev(ev_obj, retrieval, force_source_type=None):
+    if not ev_obj: return []
+    
+    # CASE 1: ev_obj is a List[EvidenceBlock dict] (from Research mode/Verification)
+    if isinstance(ev_obj, list):
+        out = []
+        for block in ev_obj:
+            if not isinstance(block, dict): continue
+            stype = force_source_type or block.get('source_type', '')
+            icon = "DOC"
+            if stype == "transcript": icon = "CALL"
+            elif stype == "news": icon = "NEWS"
+            elif stype == "filing": icon = "SEC"
+            if block.get('kind') == 'table' or "Table" in str(block.get('item', '')):
+                 icon = "TBL"
+            
+            out.append({
+                "id": block.get("evid"),
+                "text": block.get("text", ""),
+                "source": f"{block.get('ticker','')} FY{block.get('fiscal_year','')} {block.get('item','')}" if block.get('item') else block.get('ticker',''),
+                "source_type": stype,
+                "icon": icon,
+                "score": 0.95
+            })
+        return out
+
+    # CASE 2: ev_obj is a Raw Evidence Dict (from retrieval, used in Decision mode)
+    if isinstance(ev_obj, dict):
+        out = []
+        seen = set()
+        
+        # 2a) Narrative chunks
+        n_data = ev_obj.get("narrative", {})
+        cids = n_data.get("selected_chunk_ids") or [c[0] for c in n_data.get("fused", [])[:5]]
+        for cid in cids:
+            if cid in seen: continue
+            seen.add(cid)
+            row = retrieval.narrative.chunk_row.get(cid)
+            if row:
+                stype = force_source_type or row.get('source_type', '')
+                if not stype and "Item" in str(row.get('item', '')):
+                    stype = "filing"
+                icon = "DOC"
+                if stype == "transcript": icon = "CALL"
+                elif stype == "news": icon = "NEWS"
+                elif stype == "filing": icon = "SEC"
+                if "Table" in str(row.get('item', '')) or str(cid).startswith('t'):
+                     icon = "TBL"
+
+                out.append({
+                    "id": cid,
+                    "text": row.get("text", ""),
+                    "source": f"{row.get('ticker','')} FY{row.get('fiscal_year','')} {row.get('item','')}",
+                    "source_type": stype,
+                    "icon": icon,
+                    "score": 0.95
+                })
+        
+        # 2b) Table hits (if not already picked via chunks)
+        t_data = ev_obj.get("tables", {})
+        tids = t_data.get("selected_table_ids") or []
+        table_row_dict = retrieval.table_retriever.table_row if retrieval.table_retriever else {}
+        for tid in tids:
+            if tid in seen: continue
+            seen.add(tid)
+            row = table_row_dict.get(tid)
+            if row:
+                out.append({
+                    "id": tid,
+                    "text": row.get("surrogate_text", ""),
+                    "source": f"{row.get('ticker','')} FY{row.get('fiscal_year','')} {row.get('item','')}",
+                    "source_type": "filing",
+                    "icon": "TBL",
+                    "score": 0.98
+                })
+
+        # 2c) XBRL hits
+        x_data = ev_obj.get("xbrl", {})
+        xhits = x_data.get("hits") or []
+        for h in xhits:
+            xhid = f"xbrl_{h.get('concept','')}_{h.get('fy','')}"
+            if xhid in seen: continue
+            seen.add(xhid)
+            out.append({
+                "id": xhid,
+                "text": f"Concept: {h.get('concept')} label: {h.get('label')} value: {h.get('value')} {h.get('unit')}",
+                "source": f"XBRL {h.get('ticker','')} FY{h.get('fy','')}",
+                "source_type": "filing",
+                "icon": "SEC",
+                "score": 1.0
+            })
+            
+        return out
+    return []
+
 # --- Endpoints ---
 @app.post("/api/analyze")
 async def analyze_query(req: AnalyzeRequest):
@@ -110,6 +206,10 @@ async def analyze_query(req: AnalyzeRequest):
             evidence_strictness=req.strictness,
             decision_time=datetime.now(timezone.utc).isoformat(),
         )
+        
+        # Hydrate evidence for research
+        if "evidence" in result:
+             result["evidence_hydrated"] = hydrate_ev(result["evidence"], orch.retrieval)
         
         _research_cache[cache_key] = result
         return result
@@ -169,29 +269,8 @@ async def decision_analysis(req: DecisionRequest):
         # ─────────────────────────────────────────────
         logger.info("=== TOOL 1: SEC Filing Retrieval ===")
         risk_query = f"{req.ticker} FY{req.fiscal_year} Item 1A risk factors"
-        # Helper for hydration
-        def hydrate_ev(ev_obj, force_source_type=None):
-            if not isinstance(ev_obj, dict): return []
-            n_data = ev_obj.get("narrative", {})
-            cids = n_data.get("selected_chunk_ids") or [c[0] for c in n_data.get("fused", [])[:3]]
-            out = []
-            for cid in cids:
-                row = orch.retrieval.narrative.chunk_row.get(cid)
-                if row:
-                    stype = force_source_type or row.get('source_type', '')
-                    if not stype and "Item" in row.get('item', ''):
-                        stype = "filing"
-                    out.append({
-                        "id": cid,
-                        "text": row.get("text", ""),
-                        "source": f"{row.get('ticker','')} FY{row.get('fiscal_year','')} {row.get('item','')}",
-                        "source_type": stype,
-                        "score": 0.9
-                    })
-            return out
-
         risk_res, risk_debug, risk_ev = orch.retrieval.retrieve(risk_query, filters={"ticker": req.ticker})
-        tool_evidence["risk"] = hydrate_ev(risk_ev, force_source_type="filing")
+        tool_evidence["risk"] = hydrate_ev(risk_ev, orch.retrieval, force_source_type="filing")
 
         # Extract Item 1A text and run risk scanner
         from hackathon_pipeline import _extract_item_1a_text_from_context
@@ -236,7 +315,7 @@ async def decision_analysis(req: DecisionRequest):
             # Fetch transcript evidence
             tone_query = f"{req.ticker} FY{req.fiscal_year} earnings call transcript management discussion"
             _, _, tone_ev = orch.retrieval.retrieve(tone_query, filters={"ticker": req.ticker, "source_type": "transcript"})
-            tool_evidence["tone"] = hydrate_ev(tone_ev, force_source_type="transcript")
+            tool_evidence["tone"] = hydrate_ev(tone_ev, orch.retrieval, force_source_type="transcript")
 
             if current_text and prior_text:
                 tone_trend = compare_tone(current_text, prior_text, llm_client=orch.llm)
@@ -267,7 +346,7 @@ async def decision_analysis(req: DecisionRequest):
             # Fetch valuation evidence (balance sheet/cash flow)
             val_query = f"{req.ticker} FY{req.fiscal_year} free cash flow capital expenditures debt cash"
             _, _, val_ev = orch.retrieval.retrieve(val_query, filters={"ticker": req.ticker})
-            tool_evidence["valuation"] = hydrate_ev(val_ev, force_source_type="table")
+            tool_evidence["valuation"] = hydrate_ev(val_ev, orch.retrieval, force_source_type="filing")
 
             # Try to get FCF/Revenue from LLM, but fallback to yfinance if needed
             rev_val = None
@@ -395,7 +474,7 @@ async def decision_analysis(req: DecisionRequest):
             # Growth evidence
             growth_query = f"{req.ticker} FY{req.fiscal_year} income statement revenue growth segment performance"
             _, _, growth_ev = orch.retrieval.retrieve(growth_query, filters={"ticker": req.ticker})
-            tool_evidence["growth"] = hydrate_ev(growth_ev, force_source_type="table")
+            tool_evidence["growth"] = hydrate_ev(growth_ev, orch.retrieval, force_source_type="filing")
             
             tools_used["growth"] = {
                 "score": _normalize_growth(revenue_growth_yoy),
@@ -488,7 +567,7 @@ async def decision_analysis(req: DecisionRequest):
                 }
             # Scenario evidence
             _, _, sc_ev = orch.retrieval.retrieve(f"{req.ticker} FY{req.fiscal_year} financial projections bull bear", filters={"ticker": req.ticker})
-            tool_evidence["scenarios"] = hydrate_ev(sc_ev)
+            tool_evidence["scenarios"] = hydrate_ev(sc_ev, orch.retrieval, force_source_type="filing")
             logger.info("  Scenario Analysis complete: Bull IV=$%s, Bear IV=$%s", 
                         scenario_data.get("bull", {}).get("intrinsic_value"), 
                         scenario_data.get("bear", {}).get("intrinsic_value"))
@@ -515,7 +594,7 @@ async def decision_analysis(req: DecisionRequest):
                 }
             # Peer evidence
             _, _, p_ev = orch.retrieval.retrieve(f"{req.ticker} key competitors peer group valuation", filters={"ticker": req.ticker})
-            tool_evidence["peers"] = hydrate_ev(p_ev, force_source_type="table")
+            tool_evidence["peers"] = hydrate_ev(p_ev, orch.retrieval, force_source_type="filing")
             logger.info("  Peer Analysis: %s", peer_data.get("assessment"))
             
             tools_used["peers"] = {

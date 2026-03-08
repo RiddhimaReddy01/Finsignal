@@ -219,7 +219,7 @@ class NarrativeRetriever:
         bm25: BM25Okapi,
         bm25_chunk_ids: List[str],
         faiss_index: faiss.Index,
-        embedder: SentenceTransformer,
+        embedder: Optional[SentenceTransformer],
         faiss_chunk_ids: List[str],
     ):
         self.chunks_df = chunks_df
@@ -270,6 +270,8 @@ class NarrativeRetriever:
         return out
 
     def dense_search(self, query: str, k: int = 50, filters: Optional[Dict[str, Any]] = None) -> List[Tuple[str, float]]:
+        if self.embedder is None:
+            return []
         qemb = self.embedder.encode([query], normalize_embeddings=True).astype("float32")
         D, I = self.faiss_index.search(qemb, k * 10)
         out: List[Tuple[str, float]] = []
@@ -306,7 +308,7 @@ class TableRetriever:
         bm25: BM25Okapi,
         bm25_table_ids: List[str],
         faiss_index: faiss.Index,
-        embedder: SentenceTransformer,
+        embedder: Optional[SentenceTransformer],
         faiss_table_ids: List[str],
     ):
         self.tables_df = tables_df
@@ -356,6 +358,8 @@ class TableRetriever:
         return out
 
     def dense_search(self, query: str, k: int = 30, filters: Optional[Dict[str, Any]] = None) -> List[Tuple[str, float]]:
+        if self.embedder is None:
+            return []
         qemb = self.embedder.encode([query], normalize_embeddings=True).astype("float32")
         D, I = self.faiss_index.search(qemb, k * 10)
         out: List[Tuple[str, float]] = []
@@ -733,7 +737,14 @@ class FinancialRetrievalTool:
 
         self.n_faiss = faiss.read_index(str(narrative_faiss_path))
         logger.info("Loading embedding model: %s", embed_model)
-        self.embedder = _CachedEmbedder(SentenceTransformer(embed_model))
+        self.embedder: Optional[_CachedEmbedder] = None
+        try:
+            self.embedder = _CachedEmbedder(SentenceTransformer(embed_model))
+        except Exception as e:
+            logger.warning(
+                "Embedding model load failed (%s). Running in BM25-only mode without dense retrieval.",
+                e,
+            )
 
         # --- FAISS id mapping ---
         # Correct mapping requires that faiss_ids list matches the order used to build the FAISS index.
@@ -833,9 +844,13 @@ class FinancialRetrievalTool:
         self.reranker: Optional[CrossEncoderReranker] = None
         if self.cfg.use_rerank:
             if CrossEncoder is None:
-                raise RuntimeError("CrossEncoder not available. Install sentence-transformers cross-encoder deps.")
-            self.reranker = CrossEncoderReranker(self.cfg.rerank_model)
-            logger.info("Cross-encoder reranker loaded: %s", self.cfg.rerank_model)
+                logger.warning("CrossEncoder not available; reranking disabled.")
+            else:
+                try:
+                    self.reranker = CrossEncoderReranker(self.cfg.rerank_model)
+                    logger.info("Cross-encoder reranker loaded: %s", self.cfg.rerank_model)
+                except Exception as e:
+                    logger.warning("Cross-encoder reranker failed to load (%s); reranking disabled.", e)
 
         logger.info("FinancialRetrievalTool ready")
 
