@@ -611,13 +611,45 @@ input[type='range'] {
 
 .risk-chip {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
   background: var(--bg-2);
   border: 1px solid var(--line);
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-radius: 8px;
   font-size: 13px;
+  gap: 6px;
+}
+
+.risk-chip-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.sev-badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+.sev-high { background: var(--red); color: white; }
+.sev-med { background: var(--amber); color: black; }
+.sev-low { background: var(--green); color: white; }
+
+.risk-count {
+  color: var(--text-1);
+  font-size: 0.8rem;
+  margin-left: auto;
+  font-family: var(--mono);
+}
+
+.risk-snippet {
+  color: #ccc;
+  font-size: 0.85rem;
+  margin: 0;
+  line-height: 1.4;
 }
 
 .severity-hex {

@@ -264,6 +264,41 @@ async def decision_analysis(req: DecisionRequest):
         tool_evidence = {}
         tools_used = {}
 
+        # Risk category humanizer and embedder-based ranking
+        RISK_CATEGORY_NAMES = {
+            "supply_chain": "Supply Chain Risk", "regulatory": "Regulatory & Legal",
+            "competition": "Competitive Pressure", "macro": "Macroeconomic Risk",
+            "geopolitical": "Geopolitical Risk", "cyber": "Cybersecurity Risk",
+            "liquidity": "Liquidity & Capital", "customer_concentration": "Customer Concentration",
+            "litigation": "Litigation & Legal Claims",
+        }
+        RISK_CATEGORY_DESC = {
+            "supply_chain": "supply chain manufacturing logistics procurement component shortage",
+            "regulatory": "regulatory compliance investigation antitrust legal proceedings",
+            "competition": "competition competitors market share competitive pressure differentiation",
+            "macro": "recession inflation interest rates economic slowdown currency fluctuation",
+            "geopolitical": "geopolitical tariffs trade export controls sanctions war",
+            "cyber": "cybersecurity data breach security incident information systems attack",
+            "liquidity": "liquidity debt capital cash flow financing credit facility",
+            "customer_concentration": "customer concentration major customers revenue dependence",
+            "litigation": "litigation lawsuit legal proceedings settlement damages claims",
+        }
+
+        def _best_snippet(snippets, category, embedder):
+            """Use cosine similarity on existing SentenceTransformer to rank snippets."""
+            if not snippets: return ""
+            if len(snippets) == 1: return snippets[0].strip() if snippets[0] else ""
+            try:
+                import numpy as np
+                cat_desc = RISK_CATEGORY_DESC.get(category, category)
+                valid = [s for s in snippets if s and s.strip()]
+                if not valid: return ""
+                embs = embedder.encode([cat_desc] + valid, normalize_embeddings=True)
+                scores = embs[1:] @ embs[0]
+                return valid[int(np.argmax(scores))].strip()
+            except:
+                return snippets[0].strip() if snippets[0] else ""
+
         # ─────────────────────────────────────────────
         # TOOL 1: Retrieve SEC Filing context for risk
         # ─────────────────────────────────────────────
@@ -280,17 +315,34 @@ async def decision_analysis(req: DecisionRequest):
             sum(r.severity for r in risk_signals[:3]) / max(min(len(risk_signals), 3), 1)
             if risk_signals else 0.0
         )
+
+        # Use SentenceTransformer to semantically rank snippets and create snippet-based evidence
+        embedder = orch.retrieval.embedder
         top_risks = []
+        risk_snippet_evidence = []
         for r in risk_signals[:5]:
             rd = r.__dict__.copy()
-            snippet = rd.get("snippets", [""])[0] if rd.get("snippets") else "Risk identified in management discussion."
-            # Clean snippet for UI
-            snippet = str(snippet).strip()
-            if len(snippet) > 200: snippet = snippet[:197] + "..."
-            if snippet.startswith(":") or snippet.startswith(","): snippet = snippet[1:].strip()
-            if not snippet: snippet = "Standard business risk identified."
-            rd["reasoning"] = snippet
+            rd["display_name"] = RISK_CATEGORY_NAMES.get(r.category, r.category.replace("_", " ").title())
+            best = _best_snippet(r.snippets, r.category, embedder)
+            if not best: best = "Risk factor identified in management's risk disclosures."
+            if len(best) > 280: best = best[:277] + "..."
+            rd["reasoning"] = best
+            rd["all_snippets"] = [s.strip()[:280] for s in (r.snippets or [])[:3] if s and s.strip()]
             top_risks.append(rd)
+            # Create evidence blocks from the actual snippets that triggered this risk
+            for j, snip in enumerate((r.snippets or [])[:2]):
+                if snip and snip.strip():
+                    risk_snippet_evidence.append({
+                        "id": f"risk_{r.category}_{j}",
+                        "text": snip.strip(),
+                        "source": f"{req.ticker} FY{req.fiscal_year} Item 1A — {RISK_CATEGORY_NAMES.get(r.category, r.category)}",
+                        "source_type": "filing",
+                        "icon": "SEC",
+                        "score": round(r.severity, 3)
+                    })
+        # Use snippet-based evidence (semantically tied to each risk category)
+        if risk_snippet_evidence:
+            tool_evidence["risk"] = risk_snippet_evidence
         logger.info("  Risk severity avg: %s, categories: %s", risk_avg, [r.category for r in risk_signals[:5]])
         
         tools_used["risk"] = {
@@ -329,6 +381,13 @@ async def decision_analysis(req: DecisionRequest):
             logger.warning("  Transcript tone failed: %s", exc)
             tone_trend = {"delta": 0.08, "direction": "Positive", "current_sentiment": 0.65, "prior_sentiment": 0.57}
             tone_delta = 0.08
+
+        # Assign tone tool with proper structure
+        tools_used["tone"] = {
+            "score": tone_delta,
+            "factors": tone_trend,
+            "metadata": {"tool": "LLM/FinBERT Tone Analyzer", "source": "Earnings Call Transcripts"}
+        }
 
         # ─────────────────────────────────────────────
         # TOOL 3: DCF Valuation using yfinance market data
@@ -426,13 +485,21 @@ async def decision_analysis(req: DecisionRequest):
                 
             iv = dcf_result.intrinsic_value_per_share or (current_price * 1.05) # conservative fallback
             valuation_gap_pct = (iv - current_price) / current_price
+
+            # Helper to guard against NaN/inf values
+            def _safe_num(v, default=0.0):
+                try:
+                    f = float(v)
+                    return f if math.isfinite(f) else default
+                except: return default
+
             valuation_summary = {
-                "intrinsic_value": round(iv, 2),
-                "current_price": round(current_price, 2),
-                "valuation_gap_pct": round(valuation_gap_pct, 4),
-                "enterprise_value": round(dcf_result.enterprise_value or 0, 0),
-                "revenue": rev_val,
-                "fcf": fcf_proxy
+                "intrinsic_value": _safe_num(iv),
+                "current_price": _safe_num(current_price),
+                "valuation_gap_pct": _safe_num(valuation_gap_pct),
+                "enterprise_value": _safe_num(dcf_result.enterprise_value or 0),
+                "revenue": _safe_num(rev_val),
+                "fcf": _safe_num(fcf_proxy)
             }
             logger.info("  DCF intrinsic: $%.2f vs price $%.2f", iv, current_price)
             
@@ -532,11 +599,29 @@ async def decision_analysis(req: DecisionRequest):
                 "metadata": {"tool": "News Catalyst Engine", "source": "Fallback"}
             }
 
+        # Create evidence blocks from news articles
+        tool_evidence["news"] = [
+            {
+                "id": c.get("article_id", f"news_{i}"),
+                "text": c.get("title", "") + (" — " + c.get("reasoning", c.get("rationale", "")) if c.get("reasoning") or c.get("rationale") else ""),
+                "source": c.get("source_name", "News Feed"),
+                "source_type": "news",
+                "icon": "NEWS",
+                "score": round(abs(c.get("score", 0.5)), 3)
+            }
+            for i, c in enumerate(news_summary[:8]) if c.get("title")
+        ]
+
         # ─────────────────────────────────────────────
         # TOOL 6: Scenario Analysis (Bull/Bear/Stress)
         # ─────────────────────────────────────────────
         logger.info("=== TOOL 6: Scenario Analysis ===")
-        scenario_data = {}
+        # Initialize with safe defaults to prevent NaN in frontend
+        scenario_data = {
+            "base": {"intrinsic_value": 0, "current_price": 0, "valuation_gap_pct": 0},
+            "bull": {"intrinsic_value": 0, "upside_pct": 0},
+            "bear": {"intrinsic_value": 0, "downside_pct": 0},
+        }
         try:
             if fcf_proxy and current_price:
                 # Use the same FCF proxy derived in Tool 3

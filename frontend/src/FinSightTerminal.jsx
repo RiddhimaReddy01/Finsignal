@@ -3,6 +3,26 @@ import './FinSight.css';
 
 const API_BASE = 'http://localhost:8000';
 const TICKERS = ['AAPL', 'NVDA', 'TSLA', 'META', 'GOOGL'];
+
+// Risk category display names
+const RISK_CATEGORY_NAMES = {
+  supply_chain: 'Supply Chain Risk',
+  regulatory: 'Regulatory & Legal',
+  competition: 'Competitive Pressure',
+  macro: 'Macroeconomic Risk',
+  geopolitical: 'Geopolitical Risk',
+  cyber: 'Cybersecurity Risk',
+  liquidity: 'Liquidity & Capital',
+  customer_concentration: 'Customer Concentration',
+  litigation: 'Litigation & Legal Claims',
+};
+
+// Safe number formatters with null guards
+const fmtDollar = (v, d=2) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `$${Number(v).toFixed(d)}` : '—';
+const fmtBillions = (v) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `$${(Number(v)/1e9).toFixed(1)}B` : '—';
+const fmtPct = (v, d=1) => (v != null && !isNaN(Number(v))) ? `${(Number(v)*100).toFixed(d)}%` : '—';
+const fmtPctSigned = (v, d=1) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `${Number(v)>0?'+':''}${(Number(v)*100).toFixed(d)}%` : '—';
+
 const RESEARCH_MODES = [
   'auto',
   'lookup_numeric',
@@ -770,12 +790,25 @@ function FinSightTerminal() {
                       <div className="factor-container">
                         {activeToolId === 'risk' && (
                           <div className="risk-factors">
-                            {Array.isArray(activeTool.factors) ? activeTool.factors.map((f, i) => (
-                              <div key={i} className="risk-chip">
-                                <span className={`severity-hex sev-${Math.round((f.severity || 0) * 10)}`}></span>
-                                <b>{f.category || 'Risk'}</b>: {f.reasoning || f.text || 'No description provided.'}
-                              </div>
-                            )) : <div style={{padding: '10px'}}>No risk factors mapped.</div>}
+                            {Array.isArray(activeTool.factors) && activeTool.factors.length > 0
+                              ? activeTool.factors.map((f, i) => {
+                                  const sev = f.severity || 0;
+                                  const sevLabel = sev >= 0.7 ? 'HIGH' : sev >= 0.4 ? 'MED' : 'LOW';
+                                  const sevClass = sev >= 0.7 ? 'sev-high' : sev >= 0.4 ? 'sev-med' : 'sev-low';
+                                  const name = f.display_name || RISK_CATEGORY_NAMES[f.category] || (f.category||'').replace(/_/g,' ');
+                                  const snippet = f.reasoning || f.all_snippets?.[0] || f.snippets?.[0] || 'Risk identified in SEC filing.';
+                                  return (
+                                    <div key={i} className="risk-chip">
+                                      <div className="risk-chip-header">
+                                        <span className={`sev-badge ${sevClass}`}>{sevLabel}</span>
+                                        <b>{name}</b>
+                                        {f.count > 0 && <span className="risk-count">{f.count} mentions</span>}
+                                      </div>
+                                      <p className="risk-snippet">{snippet.length > 240 ? snippet.slice(0,237)+'...' : snippet}</p>
+                                    </div>
+                                  );
+                                })
+                              : <div style={{padding:'10px',color:'#888'}}>No risk factors detected.</div>}
                           </div>
                         )}
                         {activeToolId === 'tone' && (
@@ -790,19 +823,20 @@ function FinSightTerminal() {
                             <p className="tone-summary">Management tone shifted <b>{activeTool.factors.direction || 'stable'}</b> by {Math.abs(activeTool.factors.delta || 0).toFixed(3)} units.</p>
                           </div>
                         )}
-                        {activeToolId === 'valuation' && (
-                          <div className="valuation-table">
-                            <table>
-                              <tbody>
-                                <tr><td>Intrinsic Value</td><td className="signal-positive">${activeTool.factors.intrinsic_value}</td></tr>
-                                <tr><td>Market Price</td><td>${activeTool.factors.current_price}</td></tr>
-                                <tr><td>Valuation Gap</td><td className={signalClass(activeTool.factors.valuation_gap_pct)}>{(activeTool.factors.valuation_gap_pct * 100).toFixed(1)}%</td></tr>
-                                <tr><td>FCF (Proxy)</td><td>${(activeTool.factors.fcf / 1e9).toFixed(1)}B</td></tr>
-                                <tr><td>Rev (Reported)</td><td>${(activeTool.factors.revenue / 1e9).toFixed(1)}B</td></tr>
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
+                        {activeToolId === 'valuation' && (() => {
+                          const f = activeTool.factors || {};
+                          return (
+                            <div className="valuation-table">
+                              <table><tbody>
+                                <tr><td>Intrinsic Value</td><td className="signal-positive">{fmtDollar(f.intrinsic_value)}</td></tr>
+                                <tr><td>Market Price</td><td>{fmtDollar(f.current_price)}</td></tr>
+                                <tr><td>Valuation Gap</td><td className={signalClass(f.valuation_gap_pct)}>{fmtPctSigned(f.valuation_gap_pct)}</td></tr>
+                                <tr><td>FCF (Proxy)</td><td>{fmtBillions(f.fcf)}</td></tr>
+                                <tr><td>Rev (Reported)</td><td>{fmtBillions(f.revenue)}</td></tr>
+                              </tbody></table>
+                            </div>
+                          );
+                        })()}
                         {activeToolId === 'news' && (
                           <div className="news-list">
                             {Array.isArray(activeTool.factors) ? activeTool.factors.map((c, i) => (
@@ -816,13 +850,17 @@ function FinSightTerminal() {
                             )) : <div style={{padding: '10px'}}>No recent catalysts mapped.</div>}
                           </div>
                         )}
-                        {activeToolId === 'scenarios' && (
-                          <div className="scenario-mini-table">
-                            <div className="row"><span>Bull Case:</span> <b>${activeTool.factors.bull?.intrinsic_value}</b> <span className="signal-positive">+{(activeTool.factors.bull?.upside_pct * 100).toFixed(1)}%</span></div>
-                            <div className="row"><span>Base Case:</span> <b>${activeTool.factors.base?.intrinsic_value}</b></div>
-                            <div className="row"><span>Bear Case:</span> <b>${activeTool.factors.bear?.intrinsic_value}</b> <span className="signal-negative">{(activeTool.factors.bear?.downside_pct * 100).toFixed(1)}%</span></div>
-                          </div>
-                        )}
+                        {activeToolId === 'scenarios' && (() => {
+                          const f = activeTool.factors || {};
+                          const bull = f.bull || {}, base = f.base || {}, bear = f.bear || {};
+                          return (
+                            <div className="scenario-mini-table">
+                              <div className="row"><span>Bull Case:</span><b>{fmtDollar(bull.intrinsic_value)}</b><span className="signal-positive">{fmtPctSigned(bull.upside_pct)}</span></div>
+                              <div className="row"><span>Base Case:</span><b>{fmtDollar(base.intrinsic_value)}</b><span>{fmtPctSigned(base.valuation_gap_pct)}</span></div>
+                              <div className="row"><span>Bear Case:</span><b>{fmtDollar(bear.intrinsic_value)}</b><span className="signal-negative">{fmtPctSigned(bear.downside_pct)}</span></div>
+                            </div>
+                          );
+                        })()}
                         {activeToolId === 'peers' && (
                           <div className="peers-mini-report">
                             <div className="row"><span>Assessment:</span> <b className={signalClass(activeTool.score)}>{activeTool.factors.assessment}</b></div>
@@ -832,8 +870,11 @@ function FinSightTerminal() {
                         )}
                         {activeToolId === 'growth' && (
                           <div className="growth-display">
-                            <div className="big-percent">{(activeTool.factors.yoy * 100).toFixed(1)}%</div>
-                            <div className="sub-label">Revenue Growth YoY (Normalized)</div>
+                            <div className="big-percent">{fmtPct(activeTool.factors?.yoy)}</div>
+                            <div className="sub-label">Revenue Growth YoY</div>
+                            <div className="sub-label" style={{marginTop:'8px',color:'#888'}}>
+                              {(activeTool.factors?.yoy ?? 0) >= 0 ? 'Positive growth trajectory' : 'Revenue contraction detected'}
+                            </div>
                           </div>
                         )}
                       </div>
