@@ -10,6 +10,7 @@ import re
 import json
 import logging
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import asdict, is_dataclass
 
@@ -61,7 +62,7 @@ UI_FISCAL_YEARS: list[int] = sorted({int(y) for y in KB_TARGET_FYS if isinstance
 
 DARK_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 /* ── TOKENS ───────────────────────────────────────────── */
 :root {
@@ -89,7 +90,7 @@ DARK_CSS = """
 
 /* ── BASE ─────────────────────────────────────────────── */
 html, body, [class*="css"] {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-family: 'Manrope', 'Segoe UI', sans-serif !important;
   background: var(--bg-base) !important;
   color: var(--text-1) !important;
   font-size: 14px;
@@ -102,7 +103,7 @@ h1,h2,h3,h4 { color: var(--text-1) !important; letter-spacing: -0.25px; }
 p, li        { color: var(--text-2); line-height: 1.72; }
 a            { color: var(--blue) !important; }
 strong       { color: var(--text-1) !important; }
-code, pre    { font-family: 'JetBrains Mono', ui-monospace, monospace !important; font-size: 0.83em !important; }
+code, pre    { font-family: 'IBM Plex Mono', ui-monospace, monospace !important; font-size: 0.83em !important; }
 hr           { border-color: var(--border) !important; }
 
 /* ── SIDEBAR ──────────────────────────────────────────── */
@@ -127,7 +128,7 @@ hr           { border-color: var(--border) !important; }
   display: flex; align-items: center; height: 52px; gap: 18px;
 }
 .fin-logo {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
   font-size: 1.05rem; font-weight: 600;
   color: var(--blue) !important; white-space: nowrap; letter-spacing: -0.3px;
 }
@@ -135,7 +136,7 @@ hr           { border-color: var(--border) !important; }
 .fin-hdr-spacer { flex: 1; }
 .fin-hdr-crumb {
   font-size: 0.78rem; color: var(--text-3);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
   max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .fin-hdr-status { display: flex; align-items: center; gap: 6px; }
@@ -170,9 +171,9 @@ hr           { border-color: var(--border) !important; }
 .fin-query-zone {
   background: linear-gradient(145deg, rgba(22,27,34,0.98) 0%, rgba(33,38,45,0.95) 100%);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  padding: 22px 26px 18px;
-  margin-bottom: 1.5rem;
+  border-radius: var(--r-lg);
+  padding: 16px 22px 14px;
+  margin-bottom: 1.25rem;
   box-shadow: var(--shadow-md);
   position: relative; overflow: hidden;
 }
@@ -183,8 +184,8 @@ hr           { border-color: var(--border) !important; }
   opacity: 0.7;
 }
 .fin-query-title {
-  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em;
-  text-transform: uppercase; color: var(--blue); margin-bottom: 12px;
+  font-size: 0.65rem; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--blue); margin-bottom: 10px;
 }
 
 /* ── BADGES ───────────────────────────────────────────── */
@@ -219,7 +220,7 @@ hr           { border-color: var(--border) !important; }
 .fin-bar-sep { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
 .fin-bar-item { display: flex; flex-direction: column; gap: 1px; }
 .fin-bar-lbl  { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); }
-.fin-bar-val  { font-size: 0.82rem; font-weight: 500; color: var(--text-1); font-family: 'JetBrains Mono', monospace; }
+.fin-bar-val  { font-size: 0.82rem; font-weight: 500; color: var(--text-1); font-family: 'IBM Plex Mono', monospace; }
 .fin-bar-preview {
   flex: 1; min-width: 160px;
   font-size: 0.81rem; color: var(--text-2);
@@ -248,7 +249,7 @@ hr           { border-color: var(--border) !important; }
 }
 .fin-assumptions {
   margin-top: 10px; font-size: 0.8rem; color: var(--text-3);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 /* ── SIGNAL DASHBOARD ─────────────────────────────────── */
@@ -269,7 +270,7 @@ hr           { border-color: var(--border) !important; }
 .fin-rec-CAUTIOUS { border-color: rgba(240,136,62,.5);  background: rgba(240,136,62,.08);  color: var(--orange); }
 .fin-rec-AVOID    { border-color: rgba(248,81,73,.5);   background: rgba(248,81,73,.08);   color: var(--red);    }
 .fin-rec-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.65; margin-bottom: 4px; }
-.fin-rec-value { font-size: 1.9rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+.fin-rec-value { font-size: 1.9rem; font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
 .fin-score-bar { height: 5px; border-radius: 3px; background: var(--bg-overlay); overflow: hidden; margin: 7px 0 4px; }
 .fin-score-fill { height: 100%; border-radius: 3px; transition: width .6s cubic-bezier(.25,.8,.25,1); }
 .fin-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; margin: 14px 0 4px; }
@@ -278,7 +279,7 @@ hr           { border-color: var(--border) !important; }
   border-radius: var(--r-sm); padding: 9px 10px; text-align: center;
 }
 .fin-metric-lbl { font-size: 0.62rem; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; }
-.fin-metric-val { font-size: 1rem; font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-top: 3px; }
+.fin-metric-val { font-size: 1rem; font-weight: 600; font-family: 'IBM Plex Mono', monospace; margin-top: 3px; }
 .fin-risk-row {
   padding: 7px 0; border-bottom: 1px solid var(--border-sub);
   font-size: 0.83rem; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
@@ -329,19 +330,28 @@ div[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {
 .fin-src-card:nth-child(8)  { animation-delay: .32s; }
 .fin-src-card:nth-child(9)  { animation-delay: .36s; }
 .fin-src-card:nth-child(10) { animation-delay: .40s; }
+/* Cited source — animated highlight for top/key sources */
+.fin-src-card.fin-src-cited {
+  border-color: rgba(88,166,255,.45);
+  box-shadow: 0 0 0 1px rgba(88,166,255,.2);
+  animation: srcSlideIn .35s ease both, pulseGlow 2.5s ease-in-out 0.4s 2;
+}
+.fin-src-card.fin-src-cited:hover {
+  box-shadow: 0 0 20px rgba(88,166,255,.3), 0 0 0 1px rgba(88,166,255,.35);
+}
 .fin-src-idx {
   background: var(--bg-overlay); border: 1px solid var(--border);
   border-radius: var(--r-xs); min-width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 0.68rem; font-weight: 600; color: var(--blue);
-  font-family: 'JetBrains Mono', monospace; flex-shrink: 0;
+  font-family: 'IBM Plex Mono', monospace; flex-shrink: 0;
 }
 .fin-src-header { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 7px; }
 .fin-src-title  { font-size: 0.87rem; font-weight: 500; color: var(--text-1); flex: 1; line-height: 1.4; }
 .fin-src-excerpt {
   font-size: 0.79rem; color: var(--text-2); line-height: 1.6;
   padding: 8px 10px; background: rgba(0,0,0,.2); border-radius: var(--r-sm);
-  border-left: 2px solid rgba(88,166,255,.3); font-family: 'JetBrains Mono', monospace;
+  border-left: 2px solid rgba(88,166,255,.3); font-family: 'IBM Plex Mono', monospace;
   margin: 7px 0; white-space: pre-wrap; word-break: break-word;
 }
 .fin-src-footer {
@@ -366,7 +376,7 @@ div[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {
 }
 .fin-xbrl-concept { font-size: 0.85rem; font-weight: 500; color: var(--text-1); flex: 1; }
 .fin-xbrl-value {
-  font-family: 'JetBrains Mono', monospace; font-size: 0.95rem;
+  font-family: 'IBM Plex Mono', monospace; font-size: 0.95rem;
   font-weight: 600; color: var(--cyan);
 }
 .fin-xbrl-unit { font-size: 0.72rem; color: var(--text-3); margin-left: 4px; }
@@ -382,7 +392,7 @@ div[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {
   font-size: 0.81rem;
 }
 .fin-trace-row:last-child { border-bottom: none; }
-.fin-trace-key { color: var(--text-3); min-width: 120px; font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; padding-top: 1px; }
+.fin-trace-key { color: var(--text-3); min-width: 120px; font-family: 'IBM Plex Mono', monospace; font-size: 0.76rem; padding-top: 1px; }
 .fin-trace-val { color: var(--text-1); flex: 1; word-break: break-word; }
 
 /* ── REASONING PANEL ──────────────────────────────────── */
@@ -395,32 +405,36 @@ div[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {
   padding: 8px 14px; border-bottom: 1px solid var(--border-sub); font-size: 0.82rem;
 }
 .fin-rsn-row:last-child { border-bottom: none; }
-.fin-rsn-key { color: var(--text-3); min-width: 150px; font-size: 0.75rem; font-family: 'JetBrains Mono', monospace; padding-top: 2px; }
+.fin-rsn-key { color: var(--text-3); min-width: 150px; font-size: 0.75rem; font-family: 'IBM Plex Mono', monospace; padding-top: 2px; }
 .fin-rsn-val { flex: 1; color: var(--text-1); flex-wrap: wrap; }
 .fin-reason-tag {
   display: inline-block; padding: 2px 7px; border-radius: var(--r-xs); margin: 2px;
-  font-size: 0.71rem; font-family: 'JetBrains Mono', monospace;
+  font-size: 0.71rem; font-family: 'IBM Plex Mono', monospace;
   background: rgba(88,166,255,.1); color: var(--blue); border: 1px solid rgba(88,166,255,.2);
 }
 .fin-warn-tag {
   display: inline-block; padding: 2px 7px; border-radius: var(--r-xs); margin: 2px;
-  font-size: 0.71rem; font-family: 'JetBrains Mono', monospace;
+  font-size: 0.71rem; font-family: 'IBM Plex Mono', monospace;
   background: rgba(227,179,65,.1); color: var(--amber); border: 1px solid rgba(227,179,65,.2);
 }
 
-/* ── DOCUMENT DRAWER ──────────────────────────────────── */
+/* ── DOCUMENT DRAWER (SEC excerpt preview) ───────────────── */
 .fin-drawer {
-  background: var(--bg-surface); border: 1px solid rgba(88,166,255,.25);
+  background: var(--bg-surface); border: 1px solid rgba(88,166,255,.3);
   border-radius: var(--r-lg); overflow: hidden; margin-bottom: 1.2rem;
-  box-shadow: 0 0 30px rgba(88,166,255,.08);
-  animation: drawerDrop .3s cubic-bezier(.22,1,.36,1) both;
+  box-shadow: 0 4px 24px rgba(0,0,0,.4), 0 0 40px rgba(88,166,255,.06);
+  animation: drawerDrop .35s cubic-bezier(.22,1,.36,1) both;
 }
 .fin-drawer-hdr {
-  background: var(--bg-elevated); border-bottom: 1px solid var(--border);
-  padding: 12px 20px; display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-surface) 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
-.fin-drawer-title { font-size: 0.88rem; font-weight: 600; flex: 1; color: var(--text-1); }
-.fin-drawer-body { padding: 16px 20px; max-height: 480px; overflow-y: auto; }
+.fin-drawer-title {
+  font-size: 0.9rem; font-weight: 600; flex: 1; color: var(--text-1);
+  font-family: 'IBM Plex Mono', monospace;
+}
+.fin-drawer-body { padding: 18px 20px; max-height: 520px; overflow-y: auto; font-size: 0.9rem; line-height: 1.7; }
 
 /* ── EMPTY STATE ──────────────────────────────────────── */
 .fin-empty {
@@ -484,7 +498,7 @@ div[data-testid="stButton"] > button:active { transform: translateY(0) !importan
 [data-testid="stExpander"] > details summary:hover { background: rgba(255,255,255,.03) !important; }
 
 [data-testid="stMetricLabel"] p  { color: var(--text-3) !important; font-size: 0.72rem !important; }
-[data-testid="stMetricValue"]    { color: var(--text-1) !important; font-family: 'JetBrains Mono', monospace !important; font-size: 1.25rem !important; }
+[data-testid="stMetricValue"]    { color: var(--text-1) !important; font-family: 'IBM Plex Mono', monospace !important; font-size: 1.25rem !important; }
 
 div[data-testid="stStatusWidget"] {
   background: var(--bg-surface) !important;
@@ -522,8 +536,8 @@ div[data-testid="stStatusWidget"] p { color: var(--text-2) !important; font-size
 @keyframes srcSlideIn   { from { opacity: 0; transform: translateY(7px) }  to { opacity: 1; transform: translateY(0) } }
 @keyframes drawerDrop   { from { opacity: 0; transform: scaleY(.97) }       to { opacity: 1; transform: scaleY(1) } }
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 rgba(88,166,255,0); }
-  50%       { box-shadow: 0 0 20px rgba(88,166,255,.25); }
+  0%, 100% { box-shadow: 0 0 0 rgba(88,166,255,0), 0 0 0 1px rgba(88,166,255,.15); }
+  50%       { box-shadow: 0 0 24px rgba(88,166,255,.35), 0 0 0 2px rgba(88,166,255,.4); }
 }
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
@@ -533,6 +547,34 @@ div[data-testid="stStatusWidget"] p { color: var(--text-2) !important; font-size
   background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-elevated) 50%, var(--bg-surface) 75%);
   background-size: 200% 100%; animation: shimmer 1.6s infinite;
   border-radius: var(--r-sm); height: 14px;
+}
+
+/* Responsive layout tuning for tablet/mobile */
+@media (max-width: 1100px) {
+  .block-container { padding: 0 1rem 3.5rem !important; }
+  .fin-header { margin: 0 -1rem 1.25rem -1rem; padding: 0 1rem; }
+  .fin-hdr-crumb { max-width: 220px; }
+  .fin-answer-text { max-width: 100%; }
+}
+
+@media (max-width: 820px) {
+  .block-container { padding: 0 0.75rem 3rem !important; }
+  .fin-header { margin: 0 -0.75rem 1rem -0.75rem; padding: 0 0.75rem; }
+  .fin-header-inner { height: auto; min-height: 48px; padding: 8px 0; flex-wrap: wrap; gap: 10px; }
+  .fin-logo { font-size: 0.92rem; }
+  .fin-hdr-crumb { order: 3; max-width: 100%; font-size: 0.72rem; }
+  .fin-query-zone { padding: 12px 14px 12px; border-radius: var(--r-md); }
+  .fin-answer-body { padding: 16px 16px; }
+  .fin-answer-text { font-size: 0.95rem; line-height: 1.7; }
+  .fin-answer-bar {
+    top: 48px;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+  }
+  .fin-bar-sep { display: none; }
+  .fin-bar-item { min-width: 40%; }
+  .fin-drawer-body { max-height: 380px; font-size: 0.86rem; }
 }
 </style>
 """
@@ -673,9 +715,18 @@ def _esc(s: str) -> str:
 # HEADER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_header(hc: Dict, gemini_ok: bool, crumb: str = "") -> None:
+def _llm_status() -> Tuple[str, bool]:
+    """Returns (label, ok) for LLM provider status."""
+    if (os.environ.get("GEMINI_API_KEY") or "").strip():
+        return "Gemini", True
+    if (os.environ.get("OLLAMA_HOST") or os.environ.get("OLLAMA_URL") or "").strip():
+        return "Ollama", True  # Assume available if configured
+    return "LLM", False
+
+
+def render_header(hc: Dict, llm_ok: bool, llm_label: str = "LLM", crumb: str = "") -> None:
     idx_dot = "green" if hc["ok"] else "red"
-    api_dot = "green" if gemini_ok else "red"
+    api_dot = "green" if llm_ok else "red"
     crumb_html = (
         f'<div class="fin-hdr-crumb">▸ {_esc(crumb[:80])}</div>'
         if crumb else ""
@@ -692,7 +743,7 @@ def render_header(hc: Dict, gemini_ok: bool, crumb: str = "") -> None:
               <span class="fin-status-lbl">Index</span>
               <div class="fin-hdr-sep"></div>
               <span class="fin-dot fin-dot-{api_dot}"></span>
-              <span class="fin-status-lbl">API</span>
+              <span class="fin-status-lbl">{_esc(llm_label)}</span>
             </div>
           </div>
         </div>
@@ -720,6 +771,12 @@ def render_answer_section(r: Dict) -> None:
     conf_str = f"{float(conf):.0%}" if conf is not None else "—"
     ans_prev = _esc((r.get("final_answer") or "")[:100])
     act_cls  = _action_badge_cls(action)
+    raw_r    = r.get("raw", {}) or {}
+    sig_rep  = raw_r.get("hackathon_signal_report") or {}
+    sig_rec  = str(sig_rep.get("recommendation", "")).upper() if sig_rep else ""
+    rec_cls  = _rec_cls(sig_rec)
+    sig_col   = {"BUY": "green", "HOLD": "amber", "CAUTIOUS": "orange", "AVOID": "red"}.get(rec_cls, "muted")
+    sig_badge = (f'<span class="fin-badge fin-badge-{sig_col}" style="margin-left:4px">Signal: {sig_rec}</span>' if sig_rec else "")
 
     # ── Sticky summary bar ──
     st.markdown(
@@ -728,6 +785,7 @@ def render_answer_section(r: Dict) -> None:
           <div class="fin-bar-item">
             <div class="fin-bar-lbl">Action</div>
             <span class="fin-badge fin-badge-{act_cls}">{action.upper()}</span>
+            {sig_badge}
           </div>
           <div class="fin-bar-sep"></div>
           <div class="fin-bar-item">
@@ -790,7 +848,11 @@ def render_signal_section(raw: Dict) -> None:
     conf     = float(report.get("confidence", 0.0))
     comp     = score_obj.get("component_scores", {}) or {}
 
-    with st.expander("Investment Signal", expanded=True):
+    st.markdown(
+        '<div class="fin-section-label" style="margin-top:1rem;margin-bottom:6px">Investment Signals</div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("Signal Dashboard", expanded=True):
         st.markdown('<div class="fin-signal-wrap" style="border:none;padding:0;margin:0">', unsafe_allow_html=True)
 
         # ── Top row: rec + strength + confidence ──
@@ -812,7 +874,7 @@ def render_signal_section(raw: Dict) -> None:
                 f'<div style="padding:6px 0">'
                 f'<div class="fin-metric-lbl" style="margin-bottom:6px">Signal Strength</div>'
                 f'<div class="fin-score-bar"><div class="fin-score-fill" style="width:{bar_pct}%;background:{bar_col}"></div></div>'
-                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:1rem;font-weight:600;color:{bar_col}">{strength:+.3f}</div>'
+                f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:600;color:{bar_col}">{strength:+.3f}</div>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -823,7 +885,7 @@ def render_signal_section(raw: Dict) -> None:
                 f'<div style="padding:6px 0">'
                 f'<div class="fin-metric-lbl" style="margin-bottom:6px">Confidence</div>'
                 f'<div class="fin-score-bar"><div class="fin-score-fill" style="width:{conf_pct}%;background:var(--blue)"></div></div>'
-                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:1rem;font-weight:600;color:var(--blue)">{conf:.0%}</div>'
+                f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:600;color:var(--blue)">{conf:.0%}</div>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -837,7 +899,7 @@ def render_signal_section(raw: Dict) -> None:
                     f'<div style="padding:6px 0">'
                     f'<div class="fin-metric-lbl" style="margin-bottom:6px">Dominant Factor</div>'
                     f'<div style="font-size:1rem;font-weight:600;color:{dom_col}">{dominant.title()}</div>'
-                    f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.82rem;color:{dom_col}">{dom_val:+.2f}</div>'
+                    f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.82rem;color:{dom_col}">{dom_val:+.2f}</div>'
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -901,7 +963,7 @@ def render_signal_section(raw: Dict) -> None:
                     f'<div class="fin-metric-lbl">Tone Trend</div>'
                     f'<div style="font-size:1.3rem;font-weight:700;color:{col};margin:4px 0">'
                     f'{arrows.get(direction,"→")} {direction.title()}</div>'
-                    f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.8rem;color:var(--text-3)">delta: {delta:+.2f}</div>'
+                    f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.8rem;color:var(--text-3)">delta: {delta:+.2f}</div>'
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -918,9 +980,9 @@ def render_signal_section(raw: Dict) -> None:
                     f'<div class="fin-metric-lbl" style="margin-bottom:8px">Valuation</div>'
                     f'<div style="display:flex;gap:20px">'
                     f'<div><div class="fin-metric-lbl">Val. Gap</div>'
-                    f'<div class="fin-bar-val" style="font-family:\'JetBrains Mono\',monospace;font-size:0.9rem;color:var(--text-1)">{gap_s}</div></div>'
+                    f'<div class="fin-bar-val" style="font-family:\'IBM Plex Mono\',monospace;font-size:0.9rem;color:var(--text-1)">{gap_s}</div></div>'
                     f'<div><div class="fin-metric-lbl">Rev. Growth YoY</div>'
-                    f'<div class="fin-bar-val" style="font-family:\'JetBrains Mono\',monospace;font-size:0.9rem;color:var(--text-1)">{grw_s}</div></div>'
+                    f'<div class="fin-bar-val" style="font-family:\'IBM Plex Mono\',monospace;font-size:0.9rem;color:var(--text-1)">{grw_s}</div></div>'
                     f"</div></div>",
                     unsafe_allow_html=True,
                 )
@@ -998,9 +1060,10 @@ def render_evidence_tabs(r: Dict, base_dir: Path) -> None:
                 item_badge   = f'<span class="fin-badge fin-badge-muted">{_esc(str(item_b))}</span>' if item_b else ""
                 kind_badge   = f'<span class="fin-badge fin-badge-cyan">{kind_b}</span>' if kind_b else ""
                 open_btn     = (f'<a class="fin-open-btn" href="{url}" target="_blank">↗ Open Source</a>' if url else "")
+                cited_cls    = " fin-src-cited" if i <= 3 else ""  # Animated highlight for top 3 sources
 
                 st.markdown(
-                    f'<div class="fin-src-card">'
+                    f'<div class="fin-src-card{cited_cls}">'
                     f'<div class="fin-src-header">'
                     f'  <div class="fin-src-idx">{i}</div>'
                     f'  <div class="fin-src-title">{_esc(str(title))}</div>'
@@ -1109,7 +1172,7 @@ def render_evidence_tabs(r: Dict, base_dir: Path) -> None:
     with tab_audit:
         raw_r   = r.get("raw", {}) or {}
         routing = _safe_to_dict(r.get("routing", {})) or {}
-        gate    = _safe_to_dict(r.get("gate", {})) or {}
+        gate    = _safe_to_dict(r.get("gate", {})) or _safe_to_dict(raw_r.get("verification", {})) or {}
         timing  = raw_r.get("timing_ms", {}) or {}
 
         if routing:
@@ -1125,7 +1188,7 @@ def render_evidence_tabs(r: Dict, base_dir: Path) -> None:
             st.markdown("**Timing (ms)**")
             rows = "".join(
                 f'<div class="fin-trace-row"><span class="fin-trace-key">{_esc(str(k))}</span>'
-                f'<span class="fin-trace-val" style="font-family:\'JetBrains Mono\',monospace">{_esc(str(v))}</span></div>'
+                f'<span class="fin-trace-val" style="font-family:\'IBM Plex Mono\',monospace">{_esc(str(v))}</span></div>'
                 for k, v in timing.items()
             )
             st.markdown(f'<div class="fin-trace-panel">{rows}</div>', unsafe_allow_html=True)
@@ -1183,12 +1246,12 @@ def render_reasoning_panel(r: Dict) -> None:
         if conf is not None:
             rows_html += (
                 f'<div class="fin-rsn-row"><span class="fin-rsn-key">gate_confidence</span>'
-                f'<span class="fin-rsn-val" style="font-family:\'JetBrains Mono\',monospace">{float(conf):.2%}</span></div>'
+                f'<span class="fin-rsn-val" style="font-family:\'IBM Plex Mono\',monospace">{float(conf):.2%}</span></div>'
             )
 
         rows_html += (
             f'<div class="fin-rsn-row"><span class="fin-rsn-key">query_mode</span>'
-            f'<span class="fin-rsn-val" style="font-family:\'JetBrains Mono\',monospace">{_esc(mode_str)}</span></div>'
+            f'<span class="fin-rsn-val" style="font-family:\'IBM Plex Mono\',monospace">{_esc(mode_str)}</span></div>'
         )
 
         rows_html += (
@@ -1293,9 +1356,9 @@ def main() -> None:
     )
     st.markdown(DARK_CSS, unsafe_allow_html=True)
 
-    base_dir  = Path(__file__).resolve().parent
-    hc        = _health_check(base_dir)
-    gemini_ok = bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+    base_dir   = Path(__file__).resolve().parent
+    hc         = _health_check(base_dir)
+    llm_label, llm_ok = _llm_status()
 
     # ── Session state init ──────────────────────────────
     if "history"     not in st.session_state: st.session_state.history     = []
@@ -1313,11 +1376,11 @@ def main() -> None:
                 for m in hc["missing"]:
                     st.caption(m)
 
-        if gemini_ok:
-            st.success("Gemini API: ACTIVE")
+        if llm_ok:
+            st.success(f"{llm_label}: ACTIVE")
         else:
-            st.error("Gemini API: MISSING")
-            st.caption("Set GEMINI_API_KEY in .env")
+            st.error("LLM: NOT CONFIGURED")
+            st.caption("Set GEMINI_API_KEY or OLLAMA_HOST in .env")
 
         st.markdown("---")
         st.markdown(f"**Session runs:** {len(st.session_state.history)}")
@@ -1332,7 +1395,7 @@ def main() -> None:
 
     # ── Sticky Header ────────────────────────────────────
     crumb = (st.session_state.history[0].get("question", "") if st.session_state.history else "")
-    render_header(hc, gemini_ok, crumb)
+    render_header(hc, llm_ok, llm_label, crumb)
 
     # ── Document Preview Drawer ──────────────────────────
     if st.session_state.get("show_drawer"):
@@ -1344,7 +1407,8 @@ def main() -> None:
     st.markdown('<div class="fin-query-zone">', unsafe_allow_html=True)
     st.markdown('<div class="fin-query-title">Financial Intelligence Query</div>', unsafe_allow_html=True)
 
-    c_ticker, c_mode, c_fy, c_strict = st.columns([2, 3, 2, 3])
+    # Compact controls row
+    c_ticker, c_mode, c_fy, c_strict, _ = st.columns([1.2, 1.8, 1.2, 1.8, 4])
     with c_ticker:
         ticker_opts  = ["(auto)"] + UI_TICKERS if UI_TICKERS else ["(auto)"]
         ticker_choice = st.selectbox("Ticker", ticker_opts, index=0, key="sel_ticker")
@@ -1358,7 +1422,8 @@ def main() -> None:
     with c_strict:
         strictness = st.slider("Evidence Strictness", 0, 100, 70, 1, key="slider_strict")
 
-    col_q, col_run = st.columns([8, 1])
+    # Central query bar
+    col_q, col_run = st.columns([9, 1])
     with col_q:
         question = st.text_input(
             "Query",
@@ -1388,70 +1453,75 @@ def main() -> None:
             query = question.strip()
             t0 = time.time()
 
-            # Execution trace — visible only while running, collapses on completion
-            with st.status("Running financial analysis pipeline…", expanded=True) as status:
-                st.write("**Planning** — classifying query, identifying entities…")
-                try:
-                    result = orch.answer(
-                        query,
-                        market_inputs=None,
-                        auto_fetch_market=True,
-                        forced_mode=forced_mode,
-                        ui_intent=mode,
-                        ui_ticker=ticker,
-                        ui_fiscal_year=fiscal_year,
-                        evidence_strictness=strictness,
-                    )
-                except TypeError as e:
-                    if "unexpected keyword argument" in str(e):
-                        get_orchestrator.clear()
-                        orch = get_orchestrator()
+            # Execution trace — visible only while running
+            trace_placeholder = st.empty()
+            with trace_placeholder.container():
+                with st.status("Running financial analysis pipeline...", expanded=True) as status:
+                    st.write("**Planning** - classifying query, identifying entities...")
+                    try:
                         result = orch.answer(
                             query,
                             market_inputs=None,
                             auto_fetch_market=True,
                             forced_mode=forced_mode,
                             ui_intent=mode,
-                            ui_ticker=ticker,
-                            ui_fiscal_year=fiscal_year,
-                            evidence_strictness=strictness,
-                        )
-                    else:
+                        ui_ticker=ticker,
+                        ui_fiscal_year=fiscal_year,
+                        evidence_strictness=strictness,
+                        decision_time=datetime.now(timezone.utc).isoformat(),
+                    )
+                    except TypeError as e:
+                        if "unexpected keyword argument" in str(e):
+                            get_orchestrator.clear()
+                            orch = get_orchestrator()
+                            result = orch.answer(
+                                query,
+                                market_inputs=None,
+                                auto_fetch_market=True,
+                                forced_mode=forced_mode,
+                                ui_intent=mode,
+                                ui_ticker=ticker,
+                                ui_fiscal_year=fiscal_year,
+                                evidence_strictness=strictness,
+                                decision_time=datetime.now(timezone.utc).isoformat(),
+                            )
+                        else:
+                            status.update(label="Analysis failed", state="error")
+                            st.error(f"Request failed: {type(e).__name__}: {e}")
+                            st.stop()
+                    except Exception as e:
                         status.update(label="Analysis failed", state="error")
                         st.error(f"Request failed: {type(e).__name__}: {e}")
                         st.stop()
-                except Exception as e:
-                    status.update(label="Analysis failed", state="error")
-                    st.error(f"Request failed: {type(e).__name__}: {e}")
-                    st.stop()
 
-                latency_s = round(time.time() - t0, 2)
+                    latency_s = round(time.time() - t0, 2)
 
-                # Summary inside trace
-                r_obj    = result.get("routing", {}) or {}
-                v_obj    = result.get("verification", {}) or {}
-                tm_obj   = result.get("timing_ms", {}) or {}
-                det_mode = result.get("mode", "?")
-                det_mdl  = r_obj.get("model", "?")
-                det_gate = v_obj.get("status", "?")
+                    # Summary inside trace
+                    r_obj    = result.get("routing", {}) or {}
+                    v_obj    = result.get("verification", {}) or {}
+                    tm_obj   = result.get("timing_ms", {}) or {}
+                    det_mode = result.get("mode", "?")
+                    det_mdl  = r_obj.get("model", "?")
+                    det_gate = v_obj.get("status", "?")
 
-                st.write(
-                    f"**Retrieval & Verification** — mode: `{det_mode}` · model: `{det_mdl}` "
-                    f"· gate: `{det_gate}`"
-                )
-                if tm_obj:
-                    parts = " · ".join(f"{k}: {v}ms" for k, v in tm_obj.items())
-                    st.write(f"**Timing** — {parts}")
+                    st.write(
+                        f"**Retrieval & Verification** - mode: `{det_mode}` · model: `{det_mdl}` "
+                        f"· gate: `{det_gate}`"
+                    )
+                    if tm_obj:
+                        parts = " · ".join(f"{k}: {v}ms" for k, v in tm_obj.items())
+                        st.write(f"**Timing** - {parts}")
 
-                status.update(
-                    label=f"Analysis complete — {latency_s}s  ·  mode: {det_mode}  ·  {det_gate}",
-                    state="complete",
-                    expanded=False,
-                )
+                    status.update(
+                        label=f"Analysis complete - {latency_s}s  ·  mode: {det_mode}  ·  {det_gate}",
+                        state="complete",
+                        expanded=False,
+                    )
+            trace_placeholder.empty()
 
             # ── Store result ──
             routing  = result.get("routing", {}) or {}
-            gate     = result.get("gate", {}) or {}
+            gate     = result.get("verification", result.get("gate", {})) or {}
             action   = result.get("action", "abstain")
             final_answer = _extract_final_answer(result)
             evidence = _flatten_evidence(result)
@@ -1498,7 +1568,11 @@ def main() -> None:
         )
         render_evidence_tabs(r, base_dir)
 
-        # Why this answer
+        # Why this answer (collapsible reasoning)
+        st.markdown(
+            '<div class="fin-section-label" style="margin-top:1.2rem;margin-bottom:6px">Why This Answer</div>',
+            unsafe_allow_html=True,
+        )
         render_reasoning_panel(r)
 
     else:

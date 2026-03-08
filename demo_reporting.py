@@ -12,6 +12,7 @@ class DemoSignalReport:
     signal_strength: float
     confidence: float
     recommendation: str
+    decision_action: str
 
     key_findings: List[str] = field(default_factory=list)
     risk_flags: List[str] = field(default_factory=list)
@@ -31,6 +32,7 @@ class DemoSignalReport:
         lines.append(f"**Recommendation:** {self.recommendation}")
         lines.append(f"**Signal Strength:** {self.signal_strength:.2f}")
         lines.append(f"**Confidence:** {self.confidence:.2f}")
+        lines.append(f"**Decision Action:** {self.decision_action}")
         lines.append("")
 
         if self.key_findings:
@@ -82,6 +84,7 @@ def build_demo_signal_report(
     fiscal_year: Optional[int],
     company: Optional[str],
     score_obj: Dict[str, Any],
+    decision_action: str,
     top_risks: List[Dict[str, Any]],
     tone_trend: Dict[str, Any],
     valuation_summary: Dict[str, Any],
@@ -95,6 +98,7 @@ def build_demo_signal_report(
         signal_strength=float(score_obj.get("signal_score", 0.0)),
         confidence=float(score_obj.get("confidence", 0.0)),
         recommendation=str(score_obj.get("label", "HOLD")),
+        decision_action=str(decision_action or "NO_ACT"),
         key_findings=list(score_obj.get("key_findings", [])),
         risk_flags=list(score_obj.get("risk_flags", [])),
         top_risks=top_risks,

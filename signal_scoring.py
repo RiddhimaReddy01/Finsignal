@@ -14,6 +14,29 @@ class SignalScore:
     risk_flags: List[str]
 
 
+def signal_action_from_score(
+    *,
+    signal_score: float,
+    confidence: float,
+    act_threshold: float = 0.35,
+    watch_threshold: float = 0.10,
+    min_confidence: float = 0.55,
+) -> str:
+    """
+    Deterministic sponsor-track decision rule.
+      - ACT only on strong positive score with minimum confidence
+      - WATCH for moderate/uncertain positive signal
+      - NO_ACT otherwise
+    """
+    s = float(signal_score)
+    c = float(confidence)
+    if c >= float(min_confidence) and s >= float(act_threshold):
+        return "ACT"
+    if s >= float(watch_threshold):
+        return "WATCH"
+    return "NO_ACT"
+
+
 def _clip(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 

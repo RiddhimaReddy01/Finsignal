@@ -9,7 +9,7 @@ from nlp_signals import (
     compare_tone,
     extract_risk_signals,
 )
-from signal_scoring import compute_final_signal, to_dict
+from signal_scoring import compute_final_signal, signal_action_from_score, to_dict
 
 
 def _extract_item_1a_text_from_context(packed_context: str) -> str:
@@ -93,6 +93,7 @@ def run_hackathon_signal_layer(
     current_transcript_text: Optional[str] = None,
     prior_transcript_text: Optional[str] = None,
     recent_news_enabled: bool = True,
+    decision_time: Optional[str] = None,
 ) -> Dict[str, Any]:
     packed_context = str(base_result.get("packed_context") or "")
     evidence = base_result.get("evidence") or {}
@@ -122,6 +123,7 @@ def run_hackathon_signal_layer(
             articles = client.fetch_recent_news(
                 ticker=ticker,
                 company=company,
+                as_of=decision_time,
                 max_results=10,
             )
             catalysts = classify_news_catalysts([a.__dict__ for a in articles])
@@ -159,12 +161,18 @@ def run_hackathon_signal_layer(
         evidence_count=len(citations),
         contradiction_penalty=0.0,
     )
+    score_obj = to_dict(score)
+    decision_action = signal_action_from_score(
+        signal_score=float(score_obj.get("signal_score", 0.0)),
+        confidence=float(score_obj.get("confidence", 0.0)),
+    )
 
     report = build_demo_signal_report(
         ticker=ticker,
         fiscal_year=fiscal_year,
         company=company,
-        score_obj=to_dict(score),
+        score_obj=score_obj,
+        decision_action=decision_action,
         top_risks=[r.__dict__ for r in risk_signals[:5]],
         tone_trend=tone_trend,
         valuation_summary=valuation_summary,
@@ -173,7 +181,11 @@ def run_hackathon_signal_layer(
     )
 
     enriched = dict(base_result)
-    enriched["hackathon_signal_score"] = to_dict(score)
+    enriched["hackathon_signal_score"] = score_obj
+    enriched["hackathon_signal_decision"] = {
+        "action": decision_action,
+        "policy": "ACT if confidence>=0.55 and score>=0.35; WATCH if score>=0.10; else NO_ACT",
+    }
     enriched["hackathon_signal_report"] = report.to_dict()
     enriched["hackathon_signal_markdown"] = report.to_markdown()
     return enriched

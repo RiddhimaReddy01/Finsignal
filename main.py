@@ -62,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--known-tickers", type=str, default=os.environ.get("KNOWN_TICKERS"), help="Comma-separated known tickers.")
     p.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     p.add_argument("--disable-market-autofetch", action="store_true", help="Disable auto market fetch for valuation modes.")
+    p.add_argument("--decision-time", type=str, default=None, help="ISO timestamp cutoff (UTC recommended) for replay-safe runs.")
     return p
 
 
@@ -115,6 +116,7 @@ def main() -> int:
         question,
         market_inputs=market_inputs,
         auto_fetch_market=not args.disable_market_autofetch,
+        decision_time=args.decision_time,
     )
 
     _print_result(result)
@@ -141,7 +143,7 @@ def _print_result(result: Dict[str, Any]) -> None:
     if action != "answer" or not final_answer:
         reason = result.get("reason", "No answer generated")
         print(f"  [{action.upper()}] {reason}\n")
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(json.dumps(result, indent=2))
         return
 
     print(final_answer)

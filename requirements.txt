@@ -1,15 +1,2 @@
-requests==2.32.3
-beautifulsoup4==4.13.3
-pandas==2.2.3
-numpy==2.2.4
-faiss-cpu==1.13.2
-rank-bm25==0.2.2
-sentence-transformers==5.2.3
-yfinance
-transformers>=4.41.0
-torch>=2.2.0
-sentencepiece>=0.2.0
-safetensors>=0.4.3
-accelerate>=0.30.0
-streamlit
-pytest
+fastapi
+uvicorn

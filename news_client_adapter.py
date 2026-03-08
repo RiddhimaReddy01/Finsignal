@@ -15,9 +15,16 @@ class NewsClientAdapter:
     def __init__(self, client: Optional[NewsIngestionClient] = None):
         self.client = client or NewsIngestionClient()
 
-    def fetch_company_news(self, *, ticker: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def fetch_company_news(
+        self,
+        *,
+        ticker: str,
+        limit: int = 5,
+        as_of: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         rows = self.client.fetch_recent_news(
             ticker=ticker,
+            as_of=as_of,
             max_results=max(1, int(limit)),
             use_cache=True,
             force_refresh=False,

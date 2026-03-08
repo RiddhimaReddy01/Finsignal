@@ -4,3 +4,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 logs/
+data/cache/
+data/transcripts/
+models/
+node_modules/
+frontend/dist/
+test_output*.txt
+test_results.json
+test_summary.txt
+tests/mode_smoke_results*.json
+tests/signal_baseline_report.json
+.claude/

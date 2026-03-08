@@ -47,6 +47,22 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_as_of(as_of: Optional[str]) -> Optional[datetime]:
+    s = str(as_of or "").strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        logger.warning("Invalid as_of timestamp: %s", as_of)
+        return None
+
+
 def _norm_text(x: Any) -> str:
     s = str(x or "").strip()
     s = re.sub(r"\s+", " ", s)
@@ -112,6 +128,7 @@ class NewsIngestionClient:
         company: Optional[str],
         lookback_days: int,
         max_results: int,
+        as_of: Optional[str] = None,
     ) -> str:
         sig = {
             "ticker": str(ticker or "").upper(),
@@ -119,6 +136,7 @@ class NewsIngestionClient:
             "lookback_days": int(lookback_days),
             "max_results": int(max_results),
             "language": str(self.cfg.language or "").lower(),
+            "as_of": str(as_of or "").strip(),
         }
         raw = json.dumps(sig, sort_keys=True, separators=(",", ":")).encode("utf-8", errors="ignore")
         return hashlib.sha1(raw).hexdigest()[:24]
@@ -166,6 +184,7 @@ class NewsIngestionClient:
         *,
         ticker: str,
         company: Optional[str] = None,
+        as_of: Optional[str] = None,
         lookback_days: Optional[int] = None,
         max_results: Optional[int] = None,
         use_cache: bool = True,
@@ -182,13 +201,16 @@ class NewsIngestionClient:
             company=company,
             lookback_days=days,
             max_results=page_size,
+            as_of=as_of,
         )
         if use_cache and not force_refresh:
             cached = self._read_cache(cache_key)
             if cached is not None:
                 return cached
 
-        date_from = (_utc_now() - timedelta(days=days)).date().isoformat()
+        as_of_dt = _parse_as_of(as_of) or _utc_now()
+        date_from = (as_of_dt - timedelta(days=days)).date().isoformat()
+        date_to = as_of_dt.date().isoformat()
 
         query_parts = [ticker]
         if company:
@@ -198,6 +220,7 @@ class NewsIngestionClient:
         params = {
             "q": q,
             "from": date_from,
+            "to": date_to,
             "language": self.cfg.language,
             "sortBy": "publishedAt",
             "pageSize": page_size,

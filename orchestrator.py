@@ -64,6 +64,7 @@ class NewsClient(Protocol):
         *,
         ticker: str,
         limit: int = 5,
+        as_of: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         ...
 
@@ -287,19 +288,23 @@ class FinancialOrchestrator:
         )
         return merge_market_inputs(user_inputs, fetched)
 
-    def _fetch_news_context(self, plan: TaskPlan) -> str:
+    def _fetch_news_context(self, plan: TaskPlan, *, decision_time: Optional[str] = None) -> str:
         if not self.cfg.news_client or not plan.targets or not plan.targets[0].ticker:
             return ""
 
         ticker = plan.targets[0].ticker
         fy = plan.targets[0].fiscal_year
-        cache_key = DiskTTLCache.make_key("news_context", ticker, fy or "NA", 5)
+        cache_key = DiskTTLCache.make_key("news_context", ticker, fy or "NA", 5, decision_time or "")
         cached = self._news_cache.get(cache_key)
         if isinstance(cached, str):
             return cached
 
         try:
-            rows = self.cfg.news_client.fetch_company_news(ticker=ticker, limit=5)
+            rows = self.cfg.news_client.fetch_company_news(
+                ticker=ticker,
+                limit=5,
+                as_of=decision_time,
+            )
         except Exception:
             logger.exception("News fetch failed for %s", ticker)
             return ""
@@ -411,6 +416,7 @@ class FinancialOrchestrator:
         ui_ticker: Optional[str] = None,
         ui_fiscal_year: Optional[int] = None,
         evidence_strictness: Optional[int] = None,
+        decision_time: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not isinstance(question, str) or not question.strip():
             raise ValueError("question must be a non-empty string")
@@ -479,7 +485,10 @@ class FinancialOrchestrator:
         retrieval_ms = int((time.time() - r0) * 1000)
 
         # 4) External sources
-        news_context = self._fetch_news_context(plan) if plan.retrieval_plan.source_route.news else ""
+        news_context = (
+            self._fetch_news_context(plan, decision_time=decision_time)
+            if plan.retrieval_plan.source_route.news else ""
+        )
         transcript_context = self._fetch_transcript_context(plan) if plan.retrieval_plan.source_route.transcript else ""
 
         full_context = self._compose_context(
@@ -785,16 +794,37 @@ class FinancialOrchestrator:
                     "debug": fcf_debug,
                     "verification": _obj_to_dict(verification),
                 }
+            net_debt_val = merged_market_inputs.get("net_debt")
+            if net_debt_val is None:
+                net_debt_val = 0.0  # Fallback if net debt is missing
+
+            shares_out_val = merged_market_inputs.get("shares_outstanding")
+            if shares_out_val is None and merged_market_inputs.get("market_cap") and merged_market_inputs.get("price"):
+                mkt_cap = float(merged_market_inputs["market_cap"])
+                price_val = float(merged_market_inputs["price"])
+                if price_val > 0:
+                    shares_out_val = mkt_cap / price_val
+
             dcf = run_dcf(
                 last_fcf=float(fcf_payload["value"]),
                 currency=str(merged_market_inputs.get("currency") or "USD"),
                 assumptions=policy_assumptions,
-                net_debt=float(merged_market_inputs["net_debt"]) if merged_market_inputs.get("net_debt") is not None else None,
-                shares_outstanding=float(merged_market_inputs["shares_outstanding"]) if merged_market_inputs.get("shares_outstanding") is not None else None,
+                net_debt=float(net_debt_val) if net_debt_val is not None else 0.0,
+                shares_outstanding=float(shares_out_val) if shares_out_val is not None else None,
             )
 
             output_value = dcf.intrinsic_value_per_share if dcf.intrinsic_value_per_share is not None else dcf.enterprise_value
             output_name = "intrinsic_value_per_share" if dcf.intrinsic_value_per_share is not None else "enterprise_value"
+
+            valuation_gap_pct = None
+            if dcf.intrinsic_value_per_share is not None and merged_market_inputs.get("price") is not None:
+                mkt_price = float(merged_market_inputs["price"])
+                if mkt_price > 0:
+                    valuation_gap_pct = (float(dcf.intrinsic_value_per_share) - mkt_price) / mkt_price
+            elif dcf.enterprise_value is not None and merged_market_inputs.get("enterprise_value") is not None:
+                mkt_ev = float(merged_market_inputs["enterprise_value"])
+                if mkt_ev > 0:
+                    valuation_gap_pct = (float(dcf.enterprise_value) - mkt_ev) / mkt_ev
 
             result_obj = {
                 "final_answer": f"DCF {output_name}: {output_value:.4f} {dcf.currency}",
@@ -820,6 +850,7 @@ class FinancialOrchestrator:
                 "confidence": float(verification.confidence),
                 "valuation": {
                     "type": "DCF",
+                    "valuation_gap_pct": valuation_gap_pct,
                     "verified_inputs": [{
                         "name": "fcf",
                         "value": float(fcf_payload["value"]),
@@ -1070,6 +1101,7 @@ class FinancialOrchestrator:
             "ok": validation_ok,
             "action": action if validation_ok else "abstain",
             "mode": plan.mode,
+            "decision_time": decision_time,
             "result": result_obj,
             "verification": _obj_to_dict(verification),
             "routing": _obj_to_dict(route_decision),
@@ -1120,6 +1152,7 @@ class FinancialOrchestrator:
                     current_transcript_text=current_transcript_text,
                     prior_transcript_text=prior_transcript_text,
                     recent_news_enabled=True,
+                    decision_time=decision_time,
                 )
                 final_result = _merge_signals_into_answer(final_result)
 
@@ -1166,6 +1199,7 @@ def _build_signal_summary(report: Dict[str, Any], score: Dict[str, Any]) -> str:
 def _merge_signals_into_answer(final_result: Dict[str, Any]) -> Dict[str, Any]:
     report = final_result.get("hackathon_signal_report")
     score = final_result.get("hackathon_signal_score")
+    decision = final_result.get("hackathon_signal_decision") or {}
     if not report or not score:
         return final_result
 
@@ -1178,6 +1212,7 @@ def _merge_signals_into_answer(final_result: Dict[str, Any]) -> Dict[str, Any]:
         result_obj["signal_recommendation"] = report.get("recommendation", "HOLD")
         result_obj["signal_strength"] = report.get("signal_strength", 0.0)
         result_obj["signal_confidence"] = report.get("confidence", 0.0)
+        result_obj["signal_action"] = decision.get("action", "NO_ACT")
         final_result["result"] = result_obj
 
     return final_result
