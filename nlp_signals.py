@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-import math
-import re
+import json
 import logging
 import os
+import re
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, BertTokenizer, pipeline
+try:
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer, BertTokenizer, pipeline
+except ImportError:
+    torch = None # type: ignore
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +62,8 @@ class NewsCatalyst:
 
 class FinBERTToneAnalyzer:
     """
-    Finance-specific tone analyzer.
-
-    Default model:
-      ProsusAI/finbert
-
-    Notes:
-    - Runs on CPU by default if CUDA is not available.
-    - Keep a single shared instance in app/runtime if possible.
+    [DEPRECATED] Finance-specific tone analyzer using local transformers.
+    Use LLMToneAnalyzer for better reliability in non-CUDA environments.
     """
 
     def __init__(
@@ -75,6 +74,9 @@ class FinBERTToneAnalyzer:
     ):
         self.model_name = model_name
         self.max_chars = max_chars
+
+        if torch is None:
+            raise ImportError("transformers/torch not installed for FinBERTToneAnalyzer")
 
         # Some Windows/offline environments cannot build the fast tokenizer backend.
         # Fall back to slow tokenizer to keep the signal layer functional.
@@ -148,8 +150,47 @@ class FinBERTToneAnalyzer:
         )
 
 
+class LLMToneAnalyzer:
+    """
+    Tone analyzer using LLM (Gemini) for robust sentiment extraction.
+    """
+    def __init__(self, llm_client: Any):
+        self.llm_client = llm_client
+
+    def predict(self, text: str) -> ToneSignal:
+        if not text.strip():
+            return ToneSignal(0.0, "neutral", 0.0, 1.0, 0.0, 0, 0.0)
+        
+        system_prompt = (
+            "Analyze the financial tone of the following text. "
+            "Return JSON with: {\"tone_score\": float (-1 to 1), \"label\": \"positive\"|\"neutral\"|\"negative\", "
+            "\"positive_prob\": float, \"neutral_prob\": float, \"negative_prob\": float, \"confidence\": float}"
+        )
+        user_prompt = f"Text: {text[:4000]}"
+        
+        try:
+            res_text, _ = self.llm_client.generate_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model_name="small"
+            )
+            data = json.loads(res_text)
+            return ToneSignal(
+                tone_score=round(float(data.get("tone_score", 0.0)), 4),
+                label=data.get("label", "neutral"),
+                positive_prob=round(float(data.get("positive_prob", 0.0)), 4),
+                neutral_prob=round(float(data.get("neutral_prob", 1.0)), 4),
+                negative_prob=round(float(data.get("negative_prob", 0.0)), 4),
+                hedge_hits=count_hedge_words(text),
+                confidence_score=round(float(data.get("confidence", 0.5)), 4)
+            )
+        except Exception as e:
+            logger.warning("LLMToneAnalyzer failed: %s", e)
+            return _fallback_tone_from_words(text)
+
 @lru_cache(maxsize=4)
 def get_tone_analyzer(model_name: str) -> FinBERTToneAnalyzer:
+    logger.warning("get_tone_analyzer is deprecated. Use LLMToneAnalyzer.")
     return FinBERTToneAnalyzer(model_name=model_name)
 
 
@@ -383,17 +424,20 @@ def _fallback_tone_from_words(text: str) -> ToneSignal:
 
 def analyze_tone(
     text: str,
-    analyzer: Optional[FinBERTToneAnalyzer] = None,
+    analyzer: Optional[Any] = None,
     use_fallback_on_error: bool = True,
+    llm_client: Optional[Any] = None,
 ) -> ToneSignal:
     """
     Finance-aware tone analysis.
-
-    Prefers FinBERT. Falls back to a lightweight heuristic if model inference fails.
+    Favors LLM-based analysis if llm_client is provided, else falls back to local FinBERT or heuristics.
     """
     text = str(text or "").strip()
     if not text:
         return _fallback_tone_from_words(text)
+
+    if llm_client:
+        return LLMToneAnalyzer(llm_client).predict(text)
 
     try:
         analyzer = analyzer or get_default_tone_analyzer()
@@ -407,10 +451,14 @@ def analyze_tone(
 def compare_tone(
     current_text: str,
     prior_text: str,
-    analyzer: Optional[FinBERTToneAnalyzer] = None,
+    analyzer: Optional[Any] = None,
+    llm_client: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    cur = analyze_tone(current_text, analyzer=analyzer)
-    prev = analyze_tone(prior_text, analyzer=analyzer)
+    """
+    Compares tone between two text blocks.
+    """
+    cur = analyze_tone(current_text, analyzer=analyzer, llm_client=llm_client)
+    prev = analyze_tone(prior_text, analyzer=analyzer, llm_client=llm_client)
 
     delta = round(cur.tone_score - prev.tone_score, 4)
     if delta > 0.05:
@@ -498,7 +546,7 @@ def detect_material_change(
     }
 
 
-def classify_news_catalysts(articles: List[Dict[str, Any]]) -> List[NewsCatalyst]:
+def classify_news_catalysts(articles: List[Dict[str, Any]], llm_client: Optional[Any] = None) -> List[NewsCatalyst]:
     """
     Finance-aware news direction labeling.
     Uses title + description tone as a proxy.
@@ -513,7 +561,7 @@ def classify_news_catalysts(articles: List[Dict[str, Any]]) -> List[NewsCatalyst
         article_id = str(art.get("article_id") or "")
 
         text = f"{title}. {desc}".strip()
-        tone = analyze_tone(text)
+        tone = analyze_tone(text, llm_client=llm_client)
 
         if tone.tone_score > 0.08:
             direction = "positive"

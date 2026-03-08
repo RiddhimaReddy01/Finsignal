@@ -62,6 +62,8 @@ function FinSightTerminal() {
 
   const [selectedEvidence, setSelectedEvidence] = useState(null);
   const [evidenceTab, setEvidenceTab] = useState('summary');
+  const [toolEvCategory, setToolEvCategory] = useState('All');
+  const [resEvCategory, setResEvCategory] = useState('All');
 
   const runDecision = async () => {
     setDecLoading(true);
@@ -77,7 +79,7 @@ function FinSightTerminal() {
       const scoreObj = raw.hackathon_signal_score || {};
       const report = raw.hackathon_signal_report || {};
       const toolsUsed = raw.tools_used || {};
-      const evidence = raw.evidence?.chunks || [];
+      const toolEvidenceMap = raw.tool_evidence || {};
 
       const tools = [
         {
@@ -86,13 +88,14 @@ function FinSightTerminal() {
           metric: 'Risk Severity',
           score: Number(scoreObj.component_scores?.risk || 0),
           confidence: 0.68,
+          description: 'Extracts and scores key risks outlined by management in the 10-K to understand major headwinds.',
           formula: 'score = -1 * severity_avg (top risk buckets)',
           calc: 'NLP extraction from SEC Item 1A risk language with severity weighting.',
-          factors: report.top_risks || [],
+          factors: toolsUsed.risk?.factors || toolsUsed.risk?.top_risks || [],
           sourceReliability: 'High (SEC filing text)',
           uncertainty: 'Medium (keyword/context extraction)',
-          evidenceAgreement: evidence.length > 0 ? 0.8 : 0.45,
-          evidence: evidence.slice(0, 4),
+          evidenceAgreement: 0.8,
+          evidence: toolEvidenceMap.risk || [],
           toolMeta: toolsUsed.risk,
         },
         {
@@ -101,13 +104,14 @@ function FinSightTerminal() {
           metric: 'Tone Delta',
           score: Number(scoreObj.component_scores?.tone || 0),
           confidence: 0.58,
-          formula: 'score = FinBERT(current transcript) - FinBERT(prior transcript)',
+          description: 'Analyzes earnings transcripts to detect shifts in management optimism or pessimism over time.',
+          formula: 'score = LLM_Tone(current transcript) - LLM_Tone(prior transcript)',
           calc: 'Compares current vs prior earnings call sentiment trend.',
-          factors: [report.tone_trend || {}],
+          factors: toolsUsed.tone?.factors || toolsUsed.tone || {},
           sourceReliability: 'Medium (transcripts)',
           uncertainty: 'Medium-High (sentiment model noise)',
-          evidenceAgreement: evidence.length > 1 ? 0.65 : 0.4,
-          evidence: evidence.slice(1, 5),
+          evidenceAgreement: 0.65,
+          evidence: toolEvidenceMap.tone || [],
           toolMeta: toolsUsed.tone,
         },
         {
@@ -116,13 +120,14 @@ function FinSightTerminal() {
           metric: 'Valuation Gap',
           score: Number(scoreObj.component_scores?.valuation || 0),
           confidence: 0.61,
+          description: 'Calculates the intrinsic value of the company using a Discounted Cash Flow model.',
           formula: 'gap = (intrinsic_value - market_price) / market_price',
           calc: 'Projects FCF, applies discounting, compares to market price.',
-          factors: [report.valuation_summary || {}],
-          sourceReliability: 'Medium-High (market + filing inputs)',
+          factors: toolsUsed.valuation?.factors || toolsUsed.valuation || {},
+          sourceReliability: 'Medium-High (market + yfinance inputs)',
           uncertainty: 'High (WACC/terminal assumptions)',
-          evidenceAgreement: evidence.length > 2 ? 0.7 : 0.5,
-          evidence: evidence.slice(0, 3),
+          evidenceAgreement: 0.7,
+          evidence: toolEvidenceMap.valuation || [],
           toolMeta: toolsUsed.valuation,
         },
         {
@@ -131,13 +136,14 @@ function FinSightTerminal() {
           metric: 'Revenue YoY',
           score: Number(scoreObj.component_scores?.growth || 0),
           confidence: 0.62,
+          description: 'Evaluates the company’s recent top-line revenue growth trajectory.',
           formula: 'score = normalize(revenue_growth_yoy)',
           calc: 'Normalizes YoY growth from financial statements.',
-          factors: [{ yoy: toolsUsed.growth?.yoy, summary: 'Topline trend contribution.' }],
+          factors: toolsUsed.growth?.factors || { yoy: toolsUsed.growth?.yoy },
           sourceReliability: 'High (reported financial data)',
           uncertainty: 'Low-Medium',
-          evidenceAgreement: evidence.length > 0 ? 0.75 : 0.5,
-          evidence: evidence.slice(2, 6),
+          evidenceAgreement: 0.75,
+          evidence: toolEvidenceMap.growth || [],
           toolMeta: toolsUsed.growth,
         },
         {
@@ -146,14 +152,47 @@ function FinSightTerminal() {
           metric: 'Catalyst Sentiment',
           score: Number(scoreObj.component_scores?.news || 0),
           confidence: 0.42,
+          description: 'Scans recent headlines for market-moving events and product announcements.',
           formula: 'score = avg(catalyst sentiment over recent articles)',
-          calc: 'Classifies market-moving news events and direction.',
-          factors: report.news_summary || [],
+          calc: 'Classifies market-moving news events using LLM.',
+          factors: toolsUsed.news?.factors || toolsUsed.news || [],
           sourceReliability: 'Medium (external news feed)',
           uncertainty: 'High (headline volatility)',
-          evidenceAgreement: evidence.length > 0 ? 0.55 : 0.35,
-          evidence: evidence.slice(0, 4),
+          evidenceAgreement: 0.55,
+          evidence: toolEvidenceMap.news || [],
           toolMeta: toolsUsed.news,
+        },
+        {
+          id: 'scenarios',
+          name: 'Scenario Analysis',
+          metric: 'Upside/Downside',
+          score: Number(scoreObj.component_scores?.valuation || 0),
+          confidence: 0.75,
+          description: 'Stresses the valuation model with Bull and Bear assumptions to show potential price outcomes.',
+          formula: 'Projection = FCF * Growth / WACC',
+          calc: 'Simulates Bull/Bear scenarios based on FCF variability.',
+          factors: raw.scenarios || {},
+          sourceReliability: 'High (Quantitative)',
+          uncertainty: 'High (Projections)',
+          evidenceAgreement: 1.0,
+          evidence: toolEvidenceMap.scenarios || toolEvidenceMap.valuation || [],
+          toolMeta: toolsUsed.scenarios,
+        },
+        {
+          id: 'peers',
+          name: 'Peer Comparison',
+          metric: 'Relative Val',
+          score: Number(raw.peers?.premium_pct ? -raw.peers.premium_pct : 0),
+          confidence: 0.82,
+          description: 'Benchmarks the company’s valuation multiples against industry competitors.',
+          formula: 'Premium = (Target - Peer Median) / Peer Median',
+          calc: 'Compares target to industry peers (AMD, INTC, etc).',
+          factors: raw.peers || {},
+          sourceReliability: 'High (Market Data)',
+          uncertainty: 'Medium',
+          evidenceAgreement: 0.9,
+          evidence: toolEvidenceMap.peers || toolEvidenceMap.valuation || [],
+          toolMeta: toolsUsed.peers,
         },
       ];
 
@@ -166,6 +205,7 @@ function FinSightTerminal() {
         tools,
       });
       setActiveToolId('risk');
+      setToolEvCategory('All');
     } catch (err) {
       setDecError(err.message || String(err));
     } finally {
@@ -276,7 +316,7 @@ function FinSightTerminal() {
                   <button
                     key={tool.id}
                     className={activeToolId === tool.id ? `tool-card active ${signalClass(tool.score)}` : `tool-card ${signalClass(tool.score)}`}
-                    onClick={() => setActiveToolId(tool.id)}
+                    onClick={() => { setActiveToolId(tool.id); setToolEvCategory('All'); }}
                   >
                     <div className="tool-name">{tool.name}</div>
                     <div className="tool-score">{tool.score >= 0 ? '+' : ''}{tool.score.toFixed(3)}</div>
@@ -294,7 +334,9 @@ function FinSightTerminal() {
 
                   <div className="detail-grid">
                     <article className="detail-card">
-                      <h5>How Score Was Calculated</h5>
+                      <h5>What This Tool Does</h5>
+                      <p>{activeTool.description}</p>
+                      <h5 style={{marginTop: '15px'}}>How Score Was Calculated</h5>
                       <p>{activeTool.calc}</p>
                       <code>{activeTool.formula}</code>
                     </article>
@@ -305,31 +347,131 @@ function FinSightTerminal() {
                       <p>Source reliability: {activeTool.sourceReliability}</p>
                       <p>Model uncertainty: {activeTool.uncertainty}</p>
                     </article>
-                    <article className="detail-card">
+                    <article className="detail-card full-width">
                       <h5>Contributing Factors</h5>
-                      <pre>{JSON.stringify(activeTool.factors, null, 2)}</pre>
+                      <div className="factor-container">
+                        {activeToolId === 'risk' && (
+                          <div className="risk-factors">
+                            {Array.isArray(activeTool.factors) ? activeTool.factors.map((f, i) => (
+                              <div key={i} className="risk-chip">
+                                <span className={`severity-hex sev-${Math.round((f.severity || 0) * 10)}`}></span>
+                                <b>{f.category || 'Risk'}</b>: {f.reasoning || f.text || 'No description provided.'}
+                              </div>
+                            )) : <div style={{padding: '10px'}}>No risk factors mapped.</div>}
+                          </div>
+                        )}
+                        {activeToolId === 'tone' && (
+                          <div className="tone-report">
+                            <div className="tone-meter">
+                              <div className="tone-bar" style={{ width: `${((activeTool.factors.delta || 0) + 1) * 50}%` }}></div>
+                            </div>
+                            <div className="tone-labels">
+                              <span>Prior: {(activeTool.factors.prior?.tone_score ?? activeTool.factors.prior_sentiment ?? 0).toFixed(2)}</span>
+                              <span>Current: {(activeTool.factors.current?.tone_score ?? activeTool.factors.current_sentiment ?? 0).toFixed(2)}</span>
+                            </div>
+                            <p className="tone-summary">Management tone shifted <b>{activeTool.factors.direction || 'stable'}</b> by {Math.abs(activeTool.factors.delta || 0).toFixed(3)} units.</p>
+                          </div>
+                        )}
+                        {activeToolId === 'valuation' && (
+                          <div className="valuation-table">
+                            <table>
+                              <tbody>
+                                <tr><td>Intrinsic Value</td><td className="signal-positive">${activeTool.factors.intrinsic_value}</td></tr>
+                                <tr><td>Market Price</td><td>${activeTool.factors.current_price}</td></tr>
+                                <tr><td>Valuation Gap</td><td className={signalClass(activeTool.factors.valuation_gap_pct)}>{(activeTool.factors.valuation_gap_pct * 100).toFixed(1)}%</td></tr>
+                                <tr><td>FCF (Proxy)</td><td>${(activeTool.factors.fcf / 1e9).toFixed(1)}B</td></tr>
+                                <tr><td>Rev (Reported)</td><td>${(activeTool.factors.revenue / 1e9).toFixed(1)}B</td></tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        {activeToolId === 'news' && (
+                          <div className="news-list">
+                            {Array.isArray(activeTool.factors) ? activeTool.factors.map((c, i) => (
+                              <div key={i} className="news-item">
+                                <span className={`news-score ${signalClass(c.score || 0)}`}>{(c.score || 0).toFixed(1)}</span>
+                                <div className="news-content">
+                                  <div className="news-title">{c.title || 'News Update'}</div>
+                                  <div className="news-meta">{c.reasoning || 'Market movement detected.'}</div>
+                                </div>
+                              </div>
+                            )) : <div style={{padding: '10px'}}>No recent catalysts mapped.</div>}
+                          </div>
+                        )}
+                        {activeToolId === 'scenarios' && (
+                          <div className="scenario-mini-table">
+                            <div className="row"><span>Bull Case:</span> <b>${activeTool.factors.bull?.intrinsic_value}</b> <span className="signal-positive">+{(activeTool.factors.bull?.upside_pct * 100).toFixed(1)}%</span></div>
+                            <div className="row"><span>Base Case:</span> <b>${activeTool.factors.base?.intrinsic_value}</b></div>
+                            <div className="row"><span>Bear Case:</span> <b>${activeTool.factors.bear?.intrinsic_value}</b> <span className="signal-negative">{(activeTool.factors.bear?.downside_pct * 100).toFixed(1)}%</span></div>
+                          </div>
+                        )}
+                        {activeToolId === 'peers' && (
+                          <div className="peers-mini-report">
+                            <div className="row"><span>Assessment:</span> <b className={signalClass(activeTool.score)}>{activeTool.factors.assessment}</b></div>
+                            <div className="row"><span>Relative Premium:</span> <b>{(activeTool.factors.premium_pct * 100).toFixed(1)}%</b></div>
+                            <div className="row"><span>Benchmarked Peers:</span> <span className="peer-tags">{activeTool.factors.peer_tickers?.map(p => <span key={p} className="peer-tag">{p}</span>)}</span></div>
+                          </div>
+                        )}
+                        {activeToolId === 'growth' && (
+                          <div className="growth-display">
+                            <div className="big-percent">{(activeTool.factors.yoy * 100).toFixed(1)}%</div>
+                            <div className="sub-label">Revenue Growth YoY (Normalized)</div>
+                          </div>
+                        )}
+                      </div>
                     </article>
                     <article className="detail-card">
                       <h5>Tool Metadata</h5>
-                      <pre>{JSON.stringify(activeTool.toolMeta || {}, null, 2)}</pre>
+                      <div className="meta-info">
+                        <p><b>Backend Tool:</b> {activeTool.toolMeta?.tool || 'Analytical Engine'}</p>
+                        <p><b>Primary Source:</b> {activeTool.toolMeta?.source || 'SEC Filings/Market Data'}</p>
+                        <p><b>Model:</b> {activeTool.id === 'tone' || activeTool.id === 'news' ? 'Gemini 2.0 Flash' : 'Quantitative DCF'}</p>
+                        <p><b>Confidence:</b> {(activeTool.confidence * 100).toFixed(1)}%</p>
+                      </div>
                     </article>
                   </div>
 
-                  <h5 className="sub-title">Evidence Sources</h5>
-                  <div className="evidence-grid">
-                    {activeTool.evidence.map((ev, idx) => {
-                      const meta = sourceMeta(ev);
-                      return (
-                        <article key={`${activeTool.id}-${idx}`} className="evidence-card" onClick={() => setSelectedEvidence(ev)}>
-                          <div className="evidence-top">
-                            <span className="source-pill">{meta.icon}</span>
-                            <span className="source-ref">{meta.ref}</span>
-                          </div>
-                          <p>{(ev.text || '').slice(0, 140)}{(ev.text || '').length > 140 ? '...' : ''}</p>
-                          <button className="open-source-btn" type="button">Open Source</button>
-                        </article>
-                      );
-                    })}
+                  <div className="tool-ev-section">
+                    <h5 className="sub-title" style={{ marginTop: '20px', marginBottom: '10px' }}>Evidence Sources</h5>
+                    <div className="evidence-tabs" style={{ marginBottom: '15px' }}>
+                      {['All', 'SEC', 'NEWS', 'CALL', 'DOC'].map(cat => (
+                        <button 
+                          key={cat} 
+                          className={toolEvCategory === cat ? 'ev-tab active' : 'ev-tab'} 
+                          onClick={() => setToolEvCategory(cat)}
+                        >
+                          {cat === 'SEC' ? 'SEC Filings' : cat === 'NEWS' ? 'News' : cat === 'CALL' ? 'Transcripts' : cat === 'DOC' ? 'Market Data' : 'All'}
+                        </button>
+                      ))}
+                    </div>
+                    
+                    <div className="evidence-grid">
+                      {activeTool.evidence.filter(ev => {
+                        if (toolEvCategory === 'All') return true;
+                        const meta = sourceMeta(ev);
+                        if (toolEvCategory === 'SEC' && meta.icon === 'TBL') return true;
+                        return meta.icon === toolEvCategory || (toolEvCategory === 'DOC' && meta.icon === 'DOC');
+                      }).map((ev, idx) => {
+                        const meta = sourceMeta(ev);
+                        return (
+                          <article key={`${activeTool.id}-${idx}`} className="evidence-card" onClick={() => setSelectedEvidence(ev)}>
+                            <div className="evidence-top">
+                              <span className="source-pill">{meta.icon}</span>
+                              <span className="source-ref">{meta.ref}</span>
+                            </div>
+                            <p>{(ev.text || '').slice(0, 140)}{(ev.text || '').length > 140 ? '...' : ''}</p>
+                            <button className="open-source-btn" type="button">Open Source</button>
+                          </article>
+                        );
+                      })}
+                      {activeTool.evidence.filter(ev => {
+                        if (toolEvCategory === 'All') return true;
+                        if (toolEvCategory === 'SEC' && sourceMeta(ev).icon === 'TBL') return true;
+                        return sourceMeta(ev).icon === toolEvCategory || (toolEvCategory === 'DOC' && sourceMeta(ev).icon === 'DOC');
+                      }).length === 0 && (
+                        <div style={{ padding: '20px', color: '#888' }}>No evidence matching this category.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -373,88 +515,73 @@ function FinSightTerminal() {
 
           {resResult && (
             <>
-              <article className="answer-card">
-                <h3 className="section-title">Analysis Summary</h3>
-                <p>{resResult.answer}</p>
+              <article className="answer-card" style={{ marginBottom: '25px' }}>
+                <h3 className="section-title">Research Analysis & Conclusion</h3>
+                <p style={{ fontSize: '1.1rem', lineHeight: '1.6', marginBottom: '20px' }}>{resResult.answer}</p>
+                <div className="kpi-grid kpi-compact">
+                  <article className="kpi-card">
+                    <div className="kpi-label">Confidence Level</div>
+                    <div className="kpi-small">{(resResult.confidence * 100).toFixed(1)}%</div>
+                  </article>
+                  <article className={`kpi-card ${actionClass(resResult.action)}`}>
+                    <div className="kpi-label">Recommended Action</div>
+                    <div className="kpi-small">{resResult.action}</div>
+                  </article>
+                  <article className="kpi-card" style={{ flex: 2 }}>
+                    <div className="kpi-label">Key Contributing Factor / Rationale</div>
+                    <div className="kpi-small" style={{ fontSize: '1rem', fontWeight: 'normal' }}>{resResult.rationale}</div>
+                  </article>
+                </div>
               </article>
 
-              <div className="kpi-grid kpi-compact">
-                <article className="kpi-card"><div className="kpi-label">Evidence Score</div><div className="kpi-small">{resResult.evidenceScore.toFixed(2)}</div></article>
-                <article className="kpi-card"><div className="kpi-label">Confidence</div><div className="kpi-small">{(resResult.confidence * 100).toFixed(1)}%</div></article>
-                <article className={`kpi-card ${actionClass(resResult.action)}`}><div className="kpi-label">Action</div><div className="kpi-small">{resResult.action}</div></article>
-                <article className="kpi-card"><div className="kpi-label">Rationale</div><div className="kpi-small">{resResult.rationale}</div></article>
-              </div>
-
               <section className="evidence-panel">
-                <div className="evidence-tabs">
-                  <button className={evidenceTab === 'summary' ? 'ev-tab active' : 'ev-tab'} onClick={() => setEvidenceTab('summary')}>Source Summary</button>
-                  <button className={evidenceTab === 'table' ? 'ev-tab active' : 'ev-tab'} onClick={() => setEvidenceTab('table')}>Structured Table View</button>
-                  <button className={evidenceTab === 'context' ? 'ev-tab active' : 'ev-tab'} onClick={() => setEvidenceTab('context')}>Expandable Context</button>
+                <h3 className="section-title">Verifiable Evidence</h3>
+                 <div className="evidence-tabs" style={{ marginBottom: '15px' }}>
+                  {['All', 'SEC', 'NEWS', 'CALL', 'DOC'].map(cat => (
+                    <button 
+                      key={cat} 
+                      className={resEvCategory === cat ? 'ev-tab active' : 'ev-tab'} 
+                      onClick={() => setResEvCategory(cat)}
+                    >
+                      {cat === 'SEC' ? 'SEC Filings' : cat === 'NEWS' ? 'News' : cat === 'CALL' ? 'Transcripts' : cat === 'DOC' ? 'Market Data' : 'All'}
+                    </button>
+                  ))}
                 </div>
 
-                {evidenceTab === 'summary' && (
-                  <div className="evidence-grid">
-                    {resResult.evidence.map((ev, idx) => {
-                      const meta = sourceMeta(ev);
-                      return (
-                        <article key={idx} className="evidence-card" onClick={() => setSelectedEvidence(ev)}>
-                          <div className="evidence-top">
-                            <span className="source-pill">{meta.icon}</span>
-                            <span className="source-ref">{meta.ref}</span>
-                          </div>
-                          <p>{(ev.text || '').slice(0, 140)}{(ev.text || '').length > 140 ? '...' : ''}</p>
-                          <div className="evidence-bottom">
-                            <span>Conf {(Number(ev.score || ev.confidence || 0.5) * 100).toFixed(0)}%</span>
-                            <button className="open-source-btn" type="button">Open Source</button>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {evidenceTab === 'table' && (
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Type</th>
-                          <th>Citation</th>
-                          <th>Snippet</th>
-                          <th>Confidence</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {resResult.evidence.map((ev, idx) => {
-                          const meta = sourceMeta(ev);
-                          return (
-                            <tr key={`row-${idx}`}>
-                              <td>{meta.icon}</td>
-                              <td>{meta.ref}</td>
-                              <td>{(ev.text || '').slice(0, 90)}{(ev.text || '').length > 90 ? '...' : ''}</td>
-                              <td>{(Number(ev.score || ev.confidence || 0.5) * 100).toFixed(0)}%</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {evidenceTab === 'context' && (
-                  <div className="context-list">
-                    {resResult.evidence.map((ev, idx) => (
-                      <details key={`ctx-${idx}`}>
-                        <summary>{sourceMeta(ev).ref} | {(ev.source || 'Document')}</summary>
-                        <p>{ev.text || 'No text available.'}</p>
-                        <button className="open-source-btn" type="button" onClick={() => setSelectedEvidence(ev)}>Open Source</button>
-                      </details>
-                    ))}
-                  </div>
-                )}
+                <div className="evidence-grid">
+                  {resResult.evidence.filter(ev => {
+                    if (resEvCategory === 'All') return true;
+                    const meta = sourceMeta(ev);
+                    if (resEvCategory === 'SEC' && meta.icon === 'TBL') return true;
+                    return meta.icon === resEvCategory || (resEvCategory === 'DOC' && meta.icon === 'DOC');
+                  }).map((ev, idx) => {
+                    const meta = sourceMeta(ev);
+                    return (
+                      <article key={idx} className="evidence-card" onClick={() => setSelectedEvidence(ev)}>
+                        <div className="evidence-top">
+                          <span className="source-pill">{meta.icon}</span>
+                          <span className="source-ref">{meta.ref}</span>
+                        </div>
+                        <p>{(ev.text || '').slice(0, 140)}{(ev.text || '').length > 140 ? '...' : ''}</p>
+                        <div className="evidence-bottom">
+                          <span>Conf {(Number(ev.score || ev.confidence || 0.5) * 100).toFixed(0)}%</span>
+                          <button className="open-source-btn" type="button">Open Source</button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {resResult.evidence.filter(ev => {
+                    if (resEvCategory === 'All') return true;
+                    if (resEvCategory === 'SEC' && sourceMeta(ev).icon === 'TBL') return true;
+                    return sourceMeta(ev).icon === resEvCategory || (resEvCategory === 'DOC' && sourceMeta(ev).icon === 'DOC');
+                  }).length === 0 && (
+                    <div style={{ padding: '20px', color: '#888' }}>No evidence matching this category.</div>
+                  )}
+                </div>
               </section>
             </>
           )}
+
         </section>
       )}
 
