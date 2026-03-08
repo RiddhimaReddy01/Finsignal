@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from assumptions_policy import build_assumptions
+from api_cache import DiskTTLCache
 from audit import AuditLogger
 from market_api import (
     MarketDataProvider,
@@ -77,6 +78,9 @@ class OrchestratorConfig:
     market_provider: Optional[MarketDataProvider] = None
     market_cache_ttl_s: int = 300
     news_client: Optional[NewsClient] = None
+    api_cache_dir: str = "data/cache/api"
+    news_cache_ttl_s: int = 1800
+    transcript_cache_ttl_s: int = 3600
 
 
 # ============================================================
@@ -139,6 +143,14 @@ class FinancialOrchestrator:
         self.llm_client = llm_client
         self.audit = AuditLogger(str(cfg.audit_log_path))
         self._mkt_cache = TTLCache(ttl_s=int(cfg.market_cache_ttl_s))
+        self._news_cache = DiskTTLCache(
+            cache_dir=f"{cfg.api_cache_dir}/news_context",
+            ttl_s=int(cfg.news_cache_ttl_s),
+        )
+        self._transcript_cache = DiskTTLCache(
+            cache_dir=f"{cfg.api_cache_dir}/transcript_context",
+            ttl_s=int(cfg.transcript_cache_ttl_s),
+        )
         self._transcript_api: Optional[FreeTranscriptAPI] = None
         if (os.environ.get("ALPHAVANTAGE_API_KEY") or os.environ.get("AV_API_KEY") or os.environ.get("FMP_API_KEY")):
             self._transcript_api = FreeTranscriptAPI()
@@ -281,6 +293,11 @@ class FinancialOrchestrator:
 
         ticker = plan.targets[0].ticker
         fy = plan.targets[0].fiscal_year
+        cache_key = DiskTTLCache.make_key("news_context", ticker, fy or "NA", 5)
+        cached = self._news_cache.get(cache_key)
+        if isinstance(cached, str):
+            return cached
+
         try:
             rows = self.cfg.news_client.fetch_company_news(ticker=ticker, limit=5)
         except Exception:
@@ -299,7 +316,9 @@ class FinancialOrchestrator:
             header += f"{evid}]"
             body = f"Title: {title}\nPublished: {ts}\nSummary: {summary}".strip()
             chunks.append(f"{header}\n{body}")
-        return "\n\n".join(chunks)
+        context = "\n\n".join(chunks)
+        self._news_cache.set(cache_key, context)
+        return context
 
     def _fetch_transcript_context(self, plan: TaskPlan) -> str:
         if not plan.targets or not plan.targets[0].ticker:
@@ -307,6 +326,10 @@ class FinancialOrchestrator:
 
         ticker = plan.targets[0].ticker
         fy = plan.targets[0].fiscal_year
+        cache_key = DiskTTLCache.make_key("transcript_context", ticker, fy or "NA")
+        cached = self._transcript_cache.get(cache_key)
+        if isinstance(cached, str):
+            return cached
 
         local_current_text: Optional[str] = None
         local_prior_text: Optional[str] = None
@@ -341,7 +364,9 @@ class FinancialOrchestrator:
             prior_fy = (fy - 1) if fy is not None else None
             fy_tag = f"FY{prior_fy}" if prior_fy is not None else "FYNA"
             chunks.append(f"[TRANSCRIPT {ticker} {fy_tag} transcript_{ticker}_prior]\n{prior_text}")
-        return "\n\n".join(chunks)
+        context = "\n\n".join(chunks)
+        self._transcript_cache.set(cache_key, context)
+        return context
 
     def _relative_multiple_type(self, question: str) -> str:
         q = (question or "").lower()
