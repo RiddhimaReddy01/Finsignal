@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Literal
 
 from financial_metrics import FinancialMetricsEngine
+from multi_period_analysis import extract_period_range, is_multi_period_query
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,11 @@ VALUATION_TRIGGERS = [
     "valuation multiple", "earnings multiple", "ebitda multiple",
     "relative valuation", "wacc", "beta", "market cap", "share price",
 ]
+SCENARIO_TRIGGERS = [
+    "what if", "what would", "scenario", "stress test",
+    "bull case", "bear case", "sensitivity", "monte carlo",
+    "assuming wacc", "if growth", "rate shock",
+]
 
 RISK_TRIGGERS = ["risk", "risks", "risk factors", "item 1a", "uncertainty", "exposure"]
 FRAMEWORK_TRIGGERS = ["framework", "mba", "swot", "porter", "5 forces", "pestel", "4ps"]
@@ -421,6 +427,9 @@ def choose_mode_mvp(
         if ui in ("text", "narrative"):
             return "lookup_text_filing"
 
+    if any(t in ql for t in SCENARIO_TRIGGERS) and any(t in ql for t in VALUATION_TRIGGERS):
+        return "valuation"
+
     if bool(_COMPARE_TERMS.search(question)) or len(tickers) >= 2 or len(years) >= 2:
         return "comparative_analysis"
 
@@ -553,7 +562,15 @@ def build_task_plan(
 
     if mode == "comparative_analysis":
         targets: List[Target] = []
-        if tickers and years:
+        if is_multi_period_query(q, tickers, years) and len(tickers) <= 1:
+            periods = extract_period_range(q, years)
+            ticker = tickers[0] if tickers else None
+            if periods:
+                for fy in periods:
+                    targets.append(Target(ticker=ticker, fiscal_year=fy, metric=primary_metric, item_hint=item_hint))
+            else:
+                targets = [Target(ticker=ticker, fiscal_year=years[0] if years else None, metric=primary_metric, item_hint=item_hint)]
+        elif tickers and years:
             for t in tickers:
                 targets.append(Target(ticker=t, fiscal_year=years[0], metric=primary_metric, item_hint=item_hint))
         elif tickers:

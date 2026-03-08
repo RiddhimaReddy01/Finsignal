@@ -21,6 +21,10 @@ from market_api import (
 from retrieval_tool import FinancialRetrievalTool, RetrievalConfig
 from routing import decide as routing_decide
 from relative_valuation_engine import compute_multiple
+from mba_frameworks import build_framework_prompt, detect_framework_type, validate_framework_output
+from multi_period_analysis import build_multi_period_prompt
+from peer_analysis import peer_analysis_to_signal, run_peer_analysis
+from scenario_analysis import ScenarioSpec, is_whatif_query, parse_whatif, run_scenario_analysis
 from transcript_api import FreeTranscriptAPI
 from verification import (
     Target,
@@ -870,6 +874,48 @@ class FinancialOrchestrator:
                     "sensitivity": dcf.sensitivity,
                 },
             }
+            try:
+                custom_scenarios: List[ScenarioSpec] = []
+                if is_whatif_query(plan.raw_question):
+                    whatif_overrides = parse_whatif(plan.raw_question, policy_assumptions)
+                    if whatif_overrides:
+                        custom_scenarios.append(
+                            ScenarioSpec(
+                                name="User What-If",
+                                scenario_type="custom",
+                                description=f"User scenario: {plan.raw_question[:100]}",
+                                overrides=whatif_overrides,
+                            )
+                        )
+                scenario_names = ["bull", "bear", "stress_recession"]
+                scenario_result = run_scenario_analysis(
+                    ticker=plan.targets[0].ticker or "",
+                    last_fcf=float(fcf_payload["value"]),
+                    currency=str(merged_market_inputs.get("currency") or "USD"),
+                    scenario_names=scenario_names,
+                    custom_scenarios=custom_scenarios or None,
+                    net_debt=float(merged_market_inputs["net_debt"]) if merged_market_inputs.get("net_debt") is not None else None,
+                    shares_outstanding=float(merged_market_inputs["shares_outstanding"]) if merged_market_inputs.get("shares_outstanding") is not None else None,
+                    strictness=req.evidence_strictness,
+                    run_monte_carlo=("monte carlo" in plan.raw_question.lower()),
+                )
+                result_obj["scenario_analysis"] = {
+                    "base_ev": float(scenario_result.base_result.enterprise_value),
+                    "comparisons": [
+                        {
+                            "name": c.scenario_name,
+                            "ev": float(c.scenario_ev),
+                            "ev_delta_pct": float(c.ev_delta_pct),
+                            "ivps": float(c.scenario_ivps) if c.scenario_ivps is not None else None,
+                            "ivps_delta_pct": float(c.ivps_delta_pct) if c.ivps_delta_pct is not None else None,
+                            "parameter_changes": c.parameter_changes,
+                        }
+                        for c in scenario_result.comparisons
+                    ],
+                    "monte_carlo": scenario_result.monte_carlo,
+                }
+            except Exception:
+                logger.exception("scenario analysis failed")
 
         elif plan.mode == "relative_valuation":
             multiple_type = self._relative_multiple_type(plan.raw_question)
@@ -952,6 +998,21 @@ class FinancialOrchestrator:
                 }
 
             denom_value = float(denom_best.value_raw if denom_metric == "eps" else denom_best.value_scaled)
+            peer_signal: Optional[Dict[str, Any]] = None
+            peer_median: Optional[float] = None
+            if self.cfg.market_provider is not None and plan.targets[0].ticker:
+                try:
+                    peer_result = run_peer_analysis(
+                        ticker=plan.targets[0].ticker,
+                        market_provider=self.cfg.market_provider,
+                        multiples_to_compute=[multiple_type],
+                    )
+                    peer_signal = peer_analysis_to_signal(peer_result)
+                    pm = peer_signal.get("peer_median")
+                    if isinstance(pm, (int, float)):
+                        peer_median = float(pm)
+                except Exception:
+                    logger.exception("peer analysis failed for %s", plan.targets[0].ticker)
             try:
                 rv = compute_multiple(
                     multiple_type=multiple_type,  # type: ignore[arg-type]
@@ -1006,7 +1067,10 @@ class FinancialOrchestrator:
                     "numerator": {"name": "market_input", "value": float(rv.numerator), "citation": "market"},
                     "denominator": {"name": denom_metric, "value": float(rv.denominator), "citation": denom_best.evidence_id},
                     "value": float(rv.multiple),
+                    "peer_median": peer_median,
+                    "peer_premium_pct": ((float(rv.multiple) - peer_median) / peer_median) if peer_median not in (None, 0.0) else None,
                 },
+                "peer_analysis": peer_signal,
             }
 
         else:
@@ -1027,7 +1091,45 @@ class FinancialOrchestrator:
                 }
 
             model_name = self.cfg.small_model_name if route_decision.model == "small" else self.cfg.large_model_name
-            system_prompt, user_prompt = build_json_answer_prompt(plan, full_context)
+            if plan.mode == "mba_framework":
+                framework_type = detect_framework_type(plan.raw_question)
+                system_prompt, user_prompt = build_framework_prompt(
+                    question=plan.raw_question,
+                    packed_context=full_context,
+                    framework_type=framework_type,
+                    ticker=plan.targets[0].ticker if plan.targets else None,
+                    fiscal_year=plan.targets[0].fiscal_year if plan.targets else None,
+                )
+            elif plan.mode == "comparative_analysis":
+                unique_tickers = {t.ticker for t in plan.targets if t.ticker}
+                unique_years = sorted({int(t.fiscal_year) for t in plan.targets if t.fiscal_year is not None})
+                if len(unique_tickers) <= 1 and len(unique_years) >= 2:
+                    ticker = next(iter(unique_tickers)) if unique_tickers else (plan.targets[0].ticker if plan.targets else None)
+                    packed_contexts: Dict[int, str] = {}
+                    for target in plan.targets:
+                        if target.fiscal_year is None:
+                            continue
+                        t_query = f"{query} {ticker or ''} FY{target.fiscal_year}".strip()
+                        t_ctx, _, _ = self.retrieval.retrieve(
+                            t_query,
+                            filters=self._filters_from_target(target),
+                        )
+                        if t_ctx and t_ctx.strip():
+                            packed_contexts[int(target.fiscal_year)] = t_ctx
+                    if packed_contexts:
+                        system_prompt, user_prompt = build_multi_period_prompt(
+                            question=plan.raw_question,
+                            packed_contexts=packed_contexts,
+                            ticker=ticker or "",
+                            periods=sorted(packed_contexts.keys()),
+                            metric=plan.targets[0].metric if plan.targets else None,
+                        )
+                    else:
+                        system_prompt, user_prompt = build_json_answer_prompt(plan, full_context)
+                else:
+                    system_prompt, user_prompt = build_json_answer_prompt(plan, full_context)
+            else:
+                system_prompt, user_prompt = build_json_answer_prompt(plan, full_context)
 
             t0 = time.time()
             try:
@@ -1066,6 +1168,14 @@ class FinancialOrchestrator:
 
             validation_ok, validation_errors, parsed = validate_answer_json(plan, full_context, model_text)
             if isinstance(parsed, dict):
+                if plan.mode == "mba_framework":
+                    try:
+                        framework_type = detect_framework_type(plan.raw_question)
+                        fw_ok, fw_errors = validate_framework_output(parsed, framework_type)
+                        if not fw_ok:
+                            validation_errors.extend(fw_errors)
+                    except Exception:
+                        logger.exception("framework-specific validation failed")
                 parsed["confidence"] = float(verification.confidence)
                 result_obj = _append_inferences(parsed, assumptions + verification.warnings)
             else:

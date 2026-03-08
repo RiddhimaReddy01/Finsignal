@@ -549,6 +549,70 @@ div[data-testid="stStatusWidget"] p { color: var(--text-2) !important; font-size
   border-radius: var(--r-sm); height: 14px;
 }
 
+/* Workspace KPI tiles */
+.fin-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 8px 0 14px;
+}
+.fin-kpi-tile {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+}
+.fin-kpi-lbl {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.fin-kpi-val {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-1);
+  font-family: 'IBM Plex Mono', monospace;
+  margin-bottom: 4px;
+}
+.fin-kpi-sub {
+  font-size: 0.78rem;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+/* Tool cards */
+.fin-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.fin-tool-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-sub);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+}
+.fin-tool-name {
+  color: var(--text-1);
+  font-size: 0.84rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.fin-tool-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.fin-tool-mini {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.77rem;
+  color: var(--text-2);
+}
+
 /* Responsive layout tuning for tablet/mobile */
 @media (max-width: 1100px) {
   .block-container { padding: 0 1rem 3.5rem !important; }
@@ -735,7 +799,7 @@ def render_header(hc: Dict, llm_ok: bool, llm_label: str = "LLM", crumb: str = "
         f"""
         <div class="fin-header">
           <div class="fin-header-inner">
-            <div class="fin-logo">FinSight<em>// Financial Intelligence Terminal</em></div>
+            <div class="fin-logo">FinSignal AI<em>// Institutional Analysis Dashboard</em></div>
             {crumb_html}
             <div class="fin-hdr-spacer"></div>
             <div class="fin-hdr-status">
@@ -1010,6 +1074,226 @@ def render_signal_section(raw: Dict) -> None:
                 st.markdown(mkd)
 
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_research_summary_kpis(r: Dict) -> None:
+    raw = r.get("raw", {}) or {}
+    ver = raw.get("verification", {}) or {}
+    dec = raw.get("quant_decision", {}) or {}
+    score = float(dec.get("score", 0.0)) if isinstance(dec, dict) else 0.0
+    conf = float(ver.get("confidence", 0.0) or 0.0)
+    action = str(r.get("action", "abstain")).upper()
+    reason = ", ".join((ver.get("reason_codes") or [])[:2]) or "evidence-grounded"
+    html = (
+        '<div class="fin-kpi-grid">'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Evidence Score</div><div class="fin-kpi-val">{score:+.3f}</div><div class="fin-kpi-sub">Composite evidence-driven signal.</div></div>'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Confidence</div><div class="fin-kpi-val">{conf:.0%}</div><div class="fin-kpi-sub">Verification confidence from gate.</div></div>'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Action</div><div class="fin-kpi-val">{_esc(action)}</div><div class="fin-kpi-sub">Current research outcome.</div></div>'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Rationale</div><div class="fin-kpi-val" style="font-size:0.95rem">{_esc(reason)}</div><div class="fin-kpi-sub">Primary justification tags.</div></div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _build_tool_panels(raw: Dict) -> List[Dict[str, Any]]:
+    dec = raw.get("quant_decision", {}) or {}
+    ver = raw.get("verification", {}) or {}
+    routing = raw.get("routing", {}) or {}
+    result = raw.get("result", {}) or {}
+    report = raw.get("hackathon_signal_report", {}) or {}
+    weighted_map = {str(w.get("name")): w for w in (dec.get("weighted_signals") or []) if isinstance(w, dict)}
+
+    tools: List[Dict[str, Any]] = []
+
+    def add_tool(
+        tool_id: str,
+        name: str,
+        signal_key: Optional[str],
+        calc: str,
+        metrics: str,
+        formula: str,
+        factors: str,
+        evidence_refs: List[str],
+        default_conf: float = 0.5,
+    ) -> None:
+        w = weighted_map.get(signal_key or "", {})
+        score = float(w.get("score", 0.0) or 0.0)
+        conf = float(w.get("confidence", default_conf) or default_conf)
+        direction = "bullish" if score > 0.03 else "bearish" if score < -0.03 else "neutral"
+        tools.append({
+            "id": tool_id,
+            "name": name,
+            "signal_key": signal_key,
+            "score": score,
+            "direction": direction,
+            "confidence": conf,
+            "calc": calc,
+            "metrics": metrics,
+            "formula": formula,
+            "factors": factors,
+            "evidence_refs": evidence_refs,
+            "weighting": f"effective_weight={float(w.get('effective_weight', 0.0) or 0.0):.3f}, regime_mult={float(w.get('regime_mult', 1.0) or 1.0):.2f}",
+        })
+
+    add_tool(
+        "T1", "numeric_lookup", None,
+        "Deterministic lookup from filing/XBRL evidence.",
+        "metric value, unit, citation strength",
+        "direct extraction",
+        "audited table/XBRL precedence",
+        [str((result.get("numeric") or {}).get("citation") or "")],
+        default_conf=float(ver.get("confidence", 0.75) or 0.75),
+    )
+    add_tool(
+        "T2", "compute_metric", "growth",
+        "Derived metric computed from verified inputs.",
+        "input metrics, fiscal alignment, unit normalization",
+        str((result.get("computed") or {}).get("formula") or "computed ratio"),
+        "input evidence integrity + consistency",
+        [str(x.get("citation")) for x in ((result.get("computed") or {}).get("inputs") or []) if isinstance(x, dict) and x.get("citation")],
+    )
+    add_tool(
+        "T3", "dcf_valuation", "valuation",
+        "Discounted cash flow valuation gap signal.",
+        "FCF, WACC, terminal growth, sensitivity",
+        "valuation_gap -> normalized to [-1,1]",
+        "assumption stress + valuation spread",
+        [str(x.get("citation")) for x in ((result.get("valuation") or {}).get("verified_inputs") or []) if isinstance(x, dict) and x.get("citation")],
+    )
+    add_tool(
+        "T4", "relative_valuation", "peer_valuation",
+        "Market multiple vs peer median premium/discount.",
+        "target multiple, peer median, premium pct",
+        "signal = -peer_premium_pct",
+        "peer quality + multiple reliability",
+        [str((result.get("relative_valuation") or {}).get("denominator", {}).get("citation") or "")],
+    )
+    add_tool(
+        "T5", "risk_extraction", "risk",
+        "Risk language extraction from filing evidence.",
+        "severity, category counts, snippet density",
+        "signal = -avg_top_risk_severity",
+        "risk concentration in Item 1A / filing text",
+        [str(r.get("category")) for r in (report.get("top_risks") or [])[:3]],
+    )
+    add_tool(
+        "T6", "tone_comparison", "tone",
+        "Transcript tone delta vs prior period.",
+        "current tone, prior tone, delta",
+        "signal = clipped(tone_delta)",
+        "tone regime + transcript availability",
+        [str((report.get("tone_trend") or {}).get("direction") or "")],
+    )
+    add_tool(
+        "T7", "news_catalysts", "news",
+        "Recent catalyst direction from news classification.",
+        "article direction scores, source count",
+        "signal = avg(news_direction_score)",
+        "source diversity + recency weighting",
+        [str(n.get("title")) for n in (report.get("news_summary") or [])[:3]],
+    )
+    add_tool(
+        "T8", "evidence_gate", None,
+        "Verification gate on source sufficiency and consistency.",
+        "slot coverage, source coverage, thresholds",
+        "confidence gating policy",
+        "required-source pass/fail checks",
+        [str(x) for x in (ver.get("reason_codes") or [])[:4]],
+        default_conf=float(ver.get("confidence", 0.7) or 0.7),
+    )
+    add_tool(
+        "T9", "routing", None,
+        "Cost/risk aware model routing decision.",
+        "retrieval risk, coverage, margin",
+        "risk -> model selection",
+        "inference cost and uncertainty tradeoff",
+        [str(routing.get("model") or ""), str(routing.get("action") or "")],
+        default_conf=0.6,
+    )
+    return tools
+
+
+def render_decision_section(r: Dict) -> None:
+    raw = r.get("raw", {}) or {}
+    dec = raw.get("quant_decision") or {}
+    if not isinstance(dec, dict) or not dec:
+        st.info("No decision trace available yet. Run a query to generate decision diagnostics.")
+        return
+
+    action = str(dec.get("action", "WATCH"))
+    score = dec.get("score", 0.0)
+    conf = dec.get("aggregate_confidence", 0.0)
+    reason = str(dec.get("reason_code", ""))
+    regime = dec.get("regime", {}) or {}
+    weighted = dec.get("weighted_signals", []) or []
+    contradictions = dec.get("contradictions", []) or []
+    trace = dec.get("decision_tree_trace", []) or []
+
+    cls = {"ACT": "green", "WATCH": "amber", "NO_ACT": "red"}.get(action, "muted")
+    st.markdown(
+        '<div class="fin-kpi-grid">'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Decision Signal</div><div class="fin-kpi-val" style="color:var(--{cls if cls in ("green","red","amber") else "text-1"})">{_esc(action)}</div><div class="fin-kpi-sub">Final action after multi-signal aggregation and contradiction checks.</div></div>'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Signal Score</div><div class="fin-kpi-val">{float(score):+.4f}</div><div class="fin-kpi-sub">Confidence-weighted, regime-adjusted composite score.</div></div>'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Confidence</div><div class="fin-kpi-val">{float(conf):.1%}</div><div class="fin-kpi-sub">Weighted confidence minus contradiction penalty.</div></div>'
+        f'<div class="fin-kpi-tile"><div class="fin-kpi-lbl">Reason</div><div class="fin-kpi-val" style="font-size:0.95rem">{_esc(reason)}</div><div class="fin-kpi-sub">Primary decision rule fired.</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if regime:
+        st.markdown("**Regime Context**")
+        st.json(regime)
+
+    tools = _build_tool_panels(raw)
+    st.markdown("**Tool Analysis**")
+    cards = ""
+    for t in tools:
+        dir_cls = "green" if t["direction"] == "bullish" else "red" if t["direction"] == "bearish" else "muted"
+        cards += (
+            f'<div class="fin-tool-card">'
+            f'<div class="fin-tool-name">{_esc(t["id"])} · {_esc(t["name"])}</div>'
+            f'<div class="fin-tool-row">'
+            f'<span class="fin-badge fin-badge-{dir_cls}">{_esc(t["direction"])}</span>'
+            f'<span class="fin-badge fin-badge-cyan">{float(t["score"]):+.3f}</span>'
+            f'<span class="fin-badge fin-badge-muted">{float(t["confidence"]):.0%}</span>'
+            f'</div>'
+            f'<div class="fin-tool-mini">{_esc(t["calc"])}</div>'
+            f'</div>'
+        )
+    st.markdown(f'<div class="fin-tool-grid">{cards}</div>', unsafe_allow_html=True)
+    for t in tools:
+        with st.expander(f'{t["id"]} — {t["name"]}', expanded=False):
+            st.markdown(f'**How Score Was Calculated**: {t["calc"]}')
+            st.markdown(f'**Metrics Used**: {t["metrics"]}')
+            st.markdown(f'**Formula / Weighting**: `{t["formula"]}` · {t["weighting"]}')
+            st.markdown(f'**Contributing Factors**: {t["factors"]}')
+            st.markdown(f'**Confidence Calculation**: base reliability with evidence agreement and model uncertainty controls (`{float(t["confidence"]):.2f}`)')
+            refs = [x for x in t["evidence_refs"] if str(x).strip()]
+            if refs:
+                st.markdown("**Evidence Sources**")
+                for i, ref in enumerate(refs[:5], 1):
+                    st.markdown(f"- `{i}` {_esc(str(ref)[:140])}")
+
+    st.markdown("**Contradiction Check**")
+    if contradictions:
+        st.warning(f"{len(contradictions)} contradiction(s) found across high-confidence signals.")
+        st.dataframe(contradictions, use_container_width=True)
+    else:
+        st.success("No material contradictions detected across high-confidence signals.")
+
+    with st.expander("Decision Tree Trace", expanded=True):
+        for line in trace:
+            st.code(str(line), language=None)
+
+    ver = raw.get("verification", {}) or {}
+    best_ev = ver.get("best_evidence", []) or []
+    if best_ev:
+        st.markdown("**Evidence Sources**")
+        for i, ev in enumerate(best_ev[:8], 1):
+            label = f"{i}. [{ev.get('kind')}] {ev.get('evidence_id')} · {ev.get('item') or 'n/a'}"
+            snippet = str(ev.get("preview") or "")
+            with st.expander(label, expanded=False):
+                st.caption(snippet)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1349,7 +1633,7 @@ def render_document_drawer() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="FinSight — Financial Intelligence Terminal",
+        page_title="FinSignal AI",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="collapsed",
@@ -1404,187 +1688,194 @@ def main() -> None:
     # ── Query Zone ───────────────────────────────────────
     dynamic_fy = _available_fiscal_years(base_dir)
 
-    st.markdown('<div class="fin-query-zone">', unsafe_allow_html=True)
-    st.markdown('<div class="fin-query-title">Financial Intelligence Query</div>', unsafe_allow_html=True)
-
-    # Compact controls row
-    c_ticker, c_mode, c_fy, c_strict, _ = st.columns([1.2, 1.8, 1.2, 1.8, 4])
-    with c_ticker:
-        ticker_opts  = ["(auto)"] + UI_TICKERS if UI_TICKERS else ["(auto)"]
-        ticker_choice = st.selectbox("Ticker", ticker_opts, index=0, key="sel_ticker")
-        ticker = None if ticker_choice == "(auto)" else ticker_choice
-    with c_mode:
-        mode = st.selectbox("Mode", ALL_MODES, index=0, key="sel_mode")
-    with c_fy:
-        fy_opts  = ["(auto)"] + [str(y) for y in dynamic_fy] if dynamic_fy else ["(auto)"]
-        fy_choice = st.selectbox("Fiscal Year", fy_opts, index=0, key="sel_fy")
-        fiscal_year = None if fy_choice == "(auto)" else int(fy_choice)
-    with c_strict:
-        strictness = st.slider("Evidence Strictness", 0, 100, 70, 1, key="slider_strict")
-
-    # Central query bar
-    col_q, col_run = st.columns([9, 1])
-    with col_q:
-        question = st.text_input(
-            "Query",
-            value="",
-            placeholder="e.g.  What was AAPL EPS in FY2024?  ·  Compare MSFT and GOOGL revenue growth  ·  AAPL risk factors",
-            label_visibility="collapsed",
-            key="query_input",
-        )
-    with col_run:
-        run = st.button("Run →", use_container_width=True, key="run_btn")
-
-    st.markdown("</div>", unsafe_allow_html=True)  # fin-query-zone
-
-    # ── Orchestrator ─────────────────────────────────────
     try:
         orch = get_orchestrator()
     except Exception as e:
         st.error(f"Orchestrator init failed: {type(e).__name__}: {e}")
         st.stop()
 
-    # ── Execute ──────────────────────────────────────────
-    if run:
-        if not isinstance(question, str) or not question.strip():
-            st.warning("Please enter a query before clicking Run.")
-        else:
-            forced_mode = None if mode == "auto" else mode
-            query = question.strip()
-            t0 = time.time()
+    def _latest_for_workspace(workspace: str) -> Optional[Dict[str, Any]]:
+        for rec in st.session_state.history:
+            if rec.get("workspace") == workspace:
+                return rec
+        return None
 
-            # Execution trace — visible only while running
-            trace_placeholder = st.empty()
-            with trace_placeholder.container():
-                with st.status("Running financial analysis pipeline...", expanded=True) as status:
-                    st.write("**Planning** - classifying query, identifying entities...")
-                    try:
-                        result = orch.answer(
-                            query,
-                            market_inputs=None,
-                            auto_fetch_market=True,
-                            forced_mode=forced_mode,
-                            ui_intent=mode,
+    def _run_analysis(*, workspace: str, question: str, mode: str, ticker: Optional[str], fiscal_year: Optional[int], strictness: int) -> None:
+        if not question.strip():
+            st.warning("Please enter a query before running analysis.")
+            return
+
+        forced_mode = None if mode == "auto" else mode
+        t0 = time.time()
+        trace_placeholder = st.empty()
+        with trace_placeholder.container():
+            with st.status("Running financial analysis pipeline...", expanded=True) as status:
+                st.write("**Planning** - classifying query, identifying entities...")
+                try:
+                    result = orch.answer(
+                        question.strip(),
+                        market_inputs=None,
+                        auto_fetch_market=True,
+                        forced_mode=forced_mode,
+                        ui_intent=mode,
                         ui_ticker=ticker,
                         ui_fiscal_year=fiscal_year,
                         evidence_strictness=strictness,
                         decision_time=datetime.now(timezone.utc).isoformat(),
                     )
-                    except TypeError as e:
-                        if "unexpected keyword argument" in str(e):
-                            get_orchestrator.clear()
-                            orch = get_orchestrator()
-                            result = orch.answer(
-                                query,
-                                market_inputs=None,
-                                auto_fetch_market=True,
-                                forced_mode=forced_mode,
-                                ui_intent=mode,
-                                ui_ticker=ticker,
-                                ui_fiscal_year=fiscal_year,
-                                evidence_strictness=strictness,
-                                decision_time=datetime.now(timezone.utc).isoformat(),
-                            )
-                        else:
-                            status.update(label="Analysis failed", state="error")
-                            st.error(f"Request failed: {type(e).__name__}: {e}")
-                            st.stop()
-                    except Exception as e:
-                        status.update(label="Analysis failed", state="error")
-                        st.error(f"Request failed: {type(e).__name__}: {e}")
-                        st.stop()
+                except Exception as e:
+                    status.update(label="Analysis failed", state="error")
+                    st.error(f"Request failed: {type(e).__name__}: {e}")
+                    return
 
-                    latency_s = round(time.time() - t0, 2)
+                latency_s = round(time.time() - t0, 2)
+                r_obj = result.get("routing", {}) or {}
+                v_obj = result.get("verification", {}) or {}
+                tm_obj = result.get("timing_ms", {}) or {}
+                det_mode = result.get("mode", "?")
+                det_mdl = r_obj.get("model", "?")
+                det_gate = v_obj.get("status", "?")
+                st.write(f"**Retrieval & Verification** - mode: `{det_mode}` ? model: `{det_mdl}` ? gate: `{det_gate}`")
+                if tm_obj:
+                    parts = " ? ".join(f"{k}: {v}ms" for k, v in tm_obj.items())
+                    st.write(f"**Timing** - {parts}")
+                status.update(
+                    label=f"Analysis complete - {latency_s}s  ?  mode: {det_mode}  ?  {det_gate}",
+                    state="complete",
+                    expanded=False,
+                )
+        trace_placeholder.empty()
 
-                    # Summary inside trace
-                    r_obj    = result.get("routing", {}) or {}
-                    v_obj    = result.get("verification", {}) or {}
-                    tm_obj   = result.get("timing_ms", {}) or {}
-                    det_mode = result.get("mode", "?")
-                    det_mdl  = r_obj.get("model", "?")
-                    det_gate = v_obj.get("status", "?")
+        routing = result.get("routing", {}) or {}
+        gate = result.get("verification", result.get("gate", {})) or {}
+        action = result.get("action", "abstain")
+        final_answer = _extract_final_answer(result)
+        evidence = _flatten_evidence(result)
+        packed_ctx = result.get("packed_context", "") or ""
+        if not isinstance(packed_ctx, str):
+            packed_ctx = str(packed_ctx)
 
-                    st.write(
-                        f"**Retrieval & Verification** - mode: `{det_mode}` · model: `{det_mdl}` "
-                        f"· gate: `{det_gate}`"
-                    )
-                    if tm_obj:
-                        parts = " · ".join(f"{k}: {v}ms" for k, v in tm_obj.items())
-                        st.write(f"**Timing** - {parts}")
+        st.session_state.history.insert(0, {
+            "ts": int(time.time()),
+            "workspace": workspace,
+            "question": question.strip(),
+            "ticker": ticker,
+            "mode": mode,
+            "fiscal_year": fiscal_year,
+            "strictness": strictness,
+            "run_id": result.get("run_id", "?"),
+            "action": action,
+            "latency_s": latency_s,
+            "routing": routing,
+            "gate": gate,
+            "final_answer": final_answer,
+            "evidence": evidence,
+            "packed_context": packed_ctx,
+            "raw": result,
+        })
 
-                    status.update(
-                        label=f"Analysis complete - {latency_s}s  ·  mode: {det_mode}  ·  {det_gate}",
-                        state="complete",
-                        expanded=False,
-                    )
-            trace_placeholder.empty()
+    tab_decision_mode, tab_research_mode = st.tabs(["Decision Mode", "Research Mode"])
 
-            # ── Store result ──
-            routing  = result.get("routing", {}) or {}
-            gate     = result.get("verification", result.get("gate", {})) or {}
-            action   = result.get("action", "abstain")
-            final_answer = _extract_final_answer(result)
-            evidence = _flatten_evidence(result)
-            packed_ctx   = result.get("packed_context", "") or ""
-            if not isinstance(packed_ctx, str):
-                packed_ctx = str(packed_ctx)
+    with tab_decision_mode:
+        st.markdown('<div class="fin-query-zone">', unsafe_allow_html=True)
+        st.markdown('<div class="fin-query-title">Decision Mode Control Panel</div>', unsafe_allow_html=True)
+        d1, d2, d3, d4 = st.columns([1.4, 2.0, 5.2, 1.4])
+        with d1:
+            ticker_opts = ["(auto)"] + UI_TICKERS if UI_TICKERS else ["(auto)"]
+            t_choice = st.selectbox("Ticker", ticker_opts, index=0, key="dec_ticker")
+            dec_ticker = None if t_choice == "(auto)" else t_choice
+        with d2:
+            dec_strict = st.slider("Evidence Strictness", 0, 100, 70, 1, key="dec_strict")
+        with d3:
+            dec_query = st.text_input(
+                "Decision Query",
+                value="",
+                placeholder="Optional thesis prompt (leave blank for default decision analysis)",
+                label_visibility="collapsed",
+                key="dec_query",
+            )
+        with d4:
+            run_decision = st.button("Run Analysis", use_container_width=True, key="run_decision")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            st.session_state.history.insert(0, {
-                "ts":           int(time.time()),
-                "question":     question.strip(),
-                "ticker":       ticker,
-                "mode":         mode,
-                "fiscal_year":  fiscal_year,
-                "strictness":   strictness,
-                "run_id":       result.get("run_id", "—"),
-                "action":       action,
-                "latency_s":    latency_s,
-                "routing":      routing,
-                "gate":         gate,
-                "final_answer": final_answer,
-                "evidence":     evidence,
-                "packed_context": packed_ctx,
-                "raw":          result,
-            })
+        if run_decision:
+            q = dec_query.strip() if isinstance(dec_query, str) and dec_query.strip() else f"Provide an investment decision overview for {dec_ticker or 'the selected company'}."
+            _run_analysis(
+                workspace="decision",
+                question=q,
+                mode="auto",
+                ticker=dec_ticker,
+                fiscal_year=None,
+                strictness=dec_strict,
+            )
 
-    # ── Results ──────────────────────────────────────────
-    if st.session_state.history:
-        r   = st.session_state.history[0]
-        raw = r.get("raw", {}) or {}
+        dec_run = _latest_for_workspace("decision")
+        if dec_run:
+            st.markdown("<hr style='border-color:var(--border);margin:0.5rem 0 1rem'>", unsafe_allow_html=True)
+            render_decision_section(dec_run)
+        else:
+            st.markdown(
+                _EMPTY_HTML.format(icon="?", title="No decision run yet", sub="Pick a ticker and run Decision Mode to generate a traceable signal."),
+                unsafe_allow_html=True,
+            )
 
-        st.markdown("<hr style='border-color:var(--border);margin:0.5rem 0 1rem'>", unsafe_allow_html=True)
+    with tab_research_mode:
+        st.markdown('<div class="fin-query-zone">', unsafe_allow_html=True)
+        st.markdown('<div class="fin-query-title">Research Mode Control Panel</div>', unsafe_allow_html=True)
+        r1, r2, r3 = st.columns([1.4, 2.0, 2.0])
+        with r1:
+            ticker_opts = ["(auto)"] + UI_TICKERS if UI_TICKERS else ["(auto)"]
+            rt_choice = st.selectbox("Ticker", ticker_opts, index=0, key="res_ticker")
+            res_ticker = None if rt_choice == "(auto)" else rt_choice
+        with r2:
+            res_mode = st.selectbox("Mode (Tools)", ALL_MODES, index=0, key="res_mode")
+        with r3:
+            res_strict = st.slider("Evidence Strictness", 0, 100, 70, 1, key="res_strict")
 
-        # Answer (with sticky summary bar)
-        render_answer_section(r)
+        fy_opts = ["(auto)"] + [str(y) for y in dynamic_fy] if dynamic_fy else ["(auto)"]
+        fyc = st.selectbox("Fiscal Year", fy_opts, index=0, key="res_fy")
+        res_fy = None if fyc == "(auto)" else int(fyc)
 
-        # Investment signals
-        if raw.get("hackathon_signal_report"):
-            render_signal_section(raw)
+        rq1, rq2 = st.columns([8.8, 1.2])
+        with rq1:
+            res_query = st.text_input(
+                "Query",
+                value="",
+                placeholder="Ask a financial research question with evidence traceability...",
+                label_visibility="collapsed",
+                key="res_query",
+            )
+        with rq2:
+            run_research = st.button("Run Query", use_container_width=True, key="run_research")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Evidence explorer
-        st.markdown(
-            '<div class="fin-section-label" style="margin-top:1.5rem;margin-bottom:4px">Evidence Explorer</div>',
-            unsafe_allow_html=True,
-        )
-        render_evidence_tabs(r, base_dir)
+        if run_research:
+            _run_analysis(
+                workspace="research",
+                question=res_query,
+                mode=res_mode,
+                ticker=res_ticker,
+                fiscal_year=res_fy,
+                strictness=res_strict,
+            )
 
-        # Why this answer (collapsible reasoning)
-        st.markdown(
-            '<div class="fin-section-label" style="margin-top:1.2rem;margin-bottom:6px">Why This Answer</div>',
-            unsafe_allow_html=True,
-        )
-        render_reasoning_panel(r)
-
-    else:
-        # Empty state
-        st.markdown(
-            _EMPTY_HTML.format(
-                icon="⬡",
-                title="No queries yet",
-                sub="Enter a financial question above and click Run → to analyse SEC filings, earnings transcripts, and market data",
-            ),
-            unsafe_allow_html=True,
-        )
+        res_run = _latest_for_workspace("research")
+        if res_run:
+            raw = res_run.get("raw", {}) or {}
+            st.markdown("<hr style='border-color:var(--border);margin:0.5rem 0 1rem'>", unsafe_allow_html=True)
+            render_research_summary_kpis(res_run)
+            render_answer_section(res_run)
+            if raw.get("hackathon_signal_report"):
+                render_signal_section(raw)
+            st.markdown('<div class="fin-section-label" style="margin-top:1.5rem;margin-bottom:4px">Evidence Panel</div>', unsafe_allow_html=True)
+            render_evidence_tabs(res_run, base_dir)
+            st.markdown('<div class="fin-section-label" style="margin-top:1.2rem;margin-bottom:6px">Why This Answer</div>', unsafe_allow_html=True)
+            render_reasoning_panel(res_run)
+        else:
+            st.markdown(
+                _EMPTY_HTML.format(icon="?", title="No research run yet", sub="Select ticker/mode/strictness and run a query to get evidence-backed analysis."),
+                unsafe_allow_html=True,
+            )
 
 
 if __name__ == "__main__":

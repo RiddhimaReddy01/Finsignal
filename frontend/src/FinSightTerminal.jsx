@@ -1,459 +1,477 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import './FinSight.css';
 
-const API_URL = 'http://localhost:8000/api/analyze';
+const API_BASE = 'http://localhost:8000';
+const TICKERS = ['AAPL', 'NVDA', 'TSLA', 'META', 'GOOGL'];
+const RESEARCH_MODES = [
+  'auto',
+  'lookup_numeric',
+  'lookup_text',
+  'lookup_text_filing',
+  'lookup_text_management',
+  'lookup_text_news',
+  'compute_metric',
+  'comparative_analysis',
+  'risk_analysis',
+  'valuation',
+  'relative_valuation',
+  'explanatory_reasoning',
+  'mba_framework',
+  'multi_period_analysis',
+  'scenario_analysis',
+  'peer_analysis',
+];
 
-const FinSightTerminal = () => {
-  const [appTab, setAppTab] = useState('decision');
+const signalClass = (value) => {
+  if (value > 0.08) return 'signal-positive';
+  if (value < -0.08) return 'signal-negative';
+  return 'signal-neutral';
+};
+
+const actionClass = (action) => {
+  const k = (action || '').toUpperCase();
+  if (k === 'ACT' || k === 'BUY') return 'signal-positive';
+  if (k === 'WATCH' || k === 'HOLD') return 'signal-neutral';
+  return 'signal-negative';
+};
+
+const sourceMeta = (ev = {}) => {
+  const s = (ev.source_type || '').toLowerCase();
+  if (s.includes('filing')) return { icon: 'SEC', ref: '10-K Item 7/8' };
+  if (s.includes('news')) return { icon: 'NEWS', ref: 'News Catalyst' };
+  if (s.includes('transcript')) return { icon: 'CALL', ref: 'Earnings Call' };
+  if (s.includes('table')) return { icon: 'TBL', ref: 'Financial Table' };
+  return { icon: 'DOC', ref: ev.source || 'Document' };
+};
+
+function FinSightTerminal() {
+  const [tab, setTab] = useState('decision');
   const [ticker, setTicker] = useState('AAPL');
   const [strictness, setStrictness] = useState(70);
 
-  // Decision state
   const [decLoading, setDecLoading] = useState(false);
-  const [decProgress, setDecProgress] = useState('');
+  const [decError, setDecError] = useState('');
   const [decResult, setDecResult] = useState(null);
-  const [decError, setDecError] = useState(null);
-  const [activeComponent, setActiveComponent] = useState('risk');
+  const [activeToolId, setActiveToolId] = useState('risk');
 
-  // Research state
   const [resMode, setResMode] = useState('auto');
-  const [resQuery, setResQuery] = useState('');
+  const [resQuery, setResQuery] = useState('What is the latest investment signal and why?');
   const [resLoading, setResLoading] = useState(false);
+  const [resError, setResError] = useState('');
   const [resResult, setResResult] = useState(null);
-  const [resError, setResError] = useState(null);
 
-  // Modal
   const [selectedEvidence, setSelectedEvidence] = useState(null);
+  const [evidenceTab, setEvidenceTab] = useState('summary');
 
-  // ── Decision Pipeline ──
   const runDecision = async () => {
     setDecLoading(true);
-    setDecError(null);
-    setDecResult(null);
-    setDecProgress('Ingesting raw text feed & retrieving documents...');
-    setActiveComponent('risk');
-
-    const interval = setInterval(() => {
-      const msgs = [
-        'Executing Financial Orchestrator...',
-        'Scanning SEC filings for risk language...',
-        'Analyzing management tone via FinBERT...',
-        'Computing DCF valuation gap...',
-        'Scoring multi-dimensional signals...',
-        'Fetching live news sentiment...',
-        'Formulating deterministic decision rule...',
-      ];
-      setDecProgress(msgs[Math.floor(Math.random() * msgs.length)]);
-    }, 2200);
-
+    setDecError('');
     try {
-      const resp = await fetch('http://localhost:8000/api/decision', {
+      const resp = await fetch(`${API_BASE}/api/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ticker,
-          fiscal_year: 2024,
-          strictness: parseInt(strictness, 10),
-        }),
+        body: JSON.stringify({ ticker, fiscal_year: 2024, strictness }),
       });
       if (!resp.ok) throw new Error(`Server ${resp.status}: ${await resp.text()}`);
       const raw = await resp.json();
+      const scoreObj = raw.hackathon_signal_score || {};
+      const report = raw.hackathon_signal_report || {};
+      const toolsUsed = raw.tools_used || {};
+      const evidence = raw.evidence?.chunks || [];
 
-      let signal = null;
-      if (raw.hackathon_signal_report) {
-        const rep = raw.hackathon_signal_report;
-        const sc = raw.hackathon_signal_score || {};
-        signal = {
-          decision: raw.hackathon_signal_decision?.action || 'NO_ACT',
-          recommendation: (rep.recommendation || 'HOLD').toUpperCase(),
-          strength: rep.signal_strength || 0,
-          confidence: rep.confidence || 0,
-          components: sc.component_scores || {},
-          findings: rep.key_findings || [],
-          risks: rep.top_risks || [],
-          tone: rep.tone_trend || {},
-          valuation: rep.valuation_summary || {},
-          news: rep.news_summary || [],
-        };
-      }
+      const tools = [
+        {
+          id: 'risk',
+          name: 'Risk Extraction',
+          metric: 'Risk Severity',
+          score: Number(scoreObj.component_scores?.risk || 0),
+          confidence: 0.68,
+          formula: 'score = -1 * severity_avg (top risk buckets)',
+          calc: 'NLP extraction from SEC Item 1A risk language with severity weighting.',
+          factors: report.top_risks || [],
+          sourceReliability: 'High (SEC filing text)',
+          uncertainty: 'Medium (keyword/context extraction)',
+          evidenceAgreement: evidence.length > 0 ? 0.8 : 0.45,
+          evidence: evidence.slice(0, 4),
+          toolMeta: toolsUsed.risk,
+        },
+        {
+          id: 'tone',
+          name: 'Management Tone',
+          metric: 'Tone Delta',
+          score: Number(scoreObj.component_scores?.tone || 0),
+          confidence: 0.58,
+          formula: 'score = FinBERT(current transcript) - FinBERT(prior transcript)',
+          calc: 'Compares current vs prior earnings call sentiment trend.',
+          factors: [report.tone_trend || {}],
+          sourceReliability: 'Medium (transcripts)',
+          uncertainty: 'Medium-High (sentiment model noise)',
+          evidenceAgreement: evidence.length > 1 ? 0.65 : 0.4,
+          evidence: evidence.slice(1, 5),
+          toolMeta: toolsUsed.tone,
+        },
+        {
+          id: 'valuation',
+          name: 'DCF Valuation',
+          metric: 'Valuation Gap',
+          score: Number(scoreObj.component_scores?.valuation || 0),
+          confidence: 0.61,
+          formula: 'gap = (intrinsic_value - market_price) / market_price',
+          calc: 'Projects FCF, applies discounting, compares to market price.',
+          factors: [report.valuation_summary || {}],
+          sourceReliability: 'Medium-High (market + filing inputs)',
+          uncertainty: 'High (WACC/terminal assumptions)',
+          evidenceAgreement: evidence.length > 2 ? 0.7 : 0.5,
+          evidence: evidence.slice(0, 3),
+          toolMeta: toolsUsed.valuation,
+        },
+        {
+          id: 'growth',
+          name: 'Growth Signal',
+          metric: 'Revenue YoY',
+          score: Number(scoreObj.component_scores?.growth || 0),
+          confidence: 0.62,
+          formula: 'score = normalize(revenue_growth_yoy)',
+          calc: 'Normalizes YoY growth from financial statements.',
+          factors: [{ yoy: toolsUsed.growth?.yoy, summary: 'Topline trend contribution.' }],
+          sourceReliability: 'High (reported financial data)',
+          uncertainty: 'Low-Medium',
+          evidenceAgreement: evidence.length > 0 ? 0.75 : 0.5,
+          evidence: evidence.slice(2, 6),
+          toolMeta: toolsUsed.growth,
+        },
+        {
+          id: 'news',
+          name: 'News Catalyst',
+          metric: 'Catalyst Sentiment',
+          score: Number(scoreObj.component_scores?.news || 0),
+          confidence: 0.42,
+          formula: 'score = avg(catalyst sentiment over recent articles)',
+          calc: 'Classifies market-moving news events and direction.',
+          factors: report.news_summary || [],
+          sourceReliability: 'Medium (external news feed)',
+          uncertainty: 'High (headline volatility)',
+          evidenceAgreement: evidence.length > 0 ? 0.55 : 0.35,
+          evidence: evidence.slice(0, 4),
+          toolMeta: toolsUsed.news,
+        },
+      ];
 
-      // Parse evidence chunks
-      let evidence = [];
-      if (raw.evidence?.chunks) evidence = raw.evidence.chunks;
-      else if (raw.packed_context) evidence = [{ text: raw.packed_context.substring(0, 800), source: 'Raw Context' }];
-
-      setDecResult({ signal, markdown: raw.hackathon_signal_markdown || '', evidence });
-    } catch (e) {
-      setDecError(e.message);
+      setDecResult({
+        raw,
+        score: Number(scoreObj.signal_score || 0),
+        confidence: Number(scoreObj.confidence || 0),
+        action: raw.hackathon_signal_decision?.action || 'NO_ACT',
+        policy: raw.hackathon_signal_decision?.policy || '',
+        tools,
+      });
+      setActiveToolId('risk');
+    } catch (err) {
+      setDecError(err.message || String(err));
     } finally {
-      clearInterval(interval);
       setDecLoading(false);
     }
   };
 
-  // ── Research Pipeline ──
   const runResearch = async () => {
     if (!resQuery.trim()) return;
     setResLoading(true);
-    setResError(null);
-    setResResult(null);
+    setResError('');
     try {
-      const resp = await fetch(API_URL, {
+      const resp = await fetch(`${API_BASE}/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          query: resQuery, ticker, fiscal_year: 2024,
-          mode: resMode, strictness: parseInt(strictness, 10),
+          query: resQuery,
+          ticker,
+          fiscal_year: 2024,
+          mode: resMode,
+          strictness,
         }),
       });
       if (!resp.ok) throw new Error(`Server ${resp.status}: ${await resp.text()}`);
       const raw = await resp.json();
-      let answer = raw.result?.final_answer || `Abstained. Reason: ${raw.reason || 'Unknown'}`;
-      const sig = answer.indexOf('--- Investment Signal:');
-      if (sig > -1) answer = answer.substring(0, sig).trim();
-      let evidence = [];
-      if (raw.evidence?.chunks) evidence = raw.evidence.chunks.slice(0, 12);
-      else if (raw.packed_context) evidence = [{ text: raw.packed_context.substring(0, 600) + '...', source: 'Raw Context' }];
-      setResResult({ answer, evidence, mode: raw.mode || resMode, action: raw.action || 'abstain', metric: raw.result?.claims?.[0]?.value_or_summary || '', math: raw.result?.claims?.[0]?.formula || '' });
-    } catch (e) { setResError(e.message); } finally { setResLoading(false); }
+
+      const answer = raw.result?.final_answer || `Abstained. Reason: ${raw.reason || 'Unknown.'}`;
+      const evidence = raw.evidence?.chunks || [];
+      const gate = raw.verification?.gate || raw.result?.gate || {};
+
+      setResResult({
+        raw,
+        answer,
+        action: (raw.action || 'abstain').toUpperCase(),
+        rationale: raw.reason || 'Rationale derived from selected mode and evidence set.',
+        confidence: Number(raw.result?.confidence || gate.confidence || 0),
+        evidenceScore: Number(gate.score || gate.evidence_score || 0),
+        evidence,
+      });
+      setEvidenceTab('summary');
+    } catch (err) {
+      setResError(err.message || String(err));
+    } finally {
+      setResLoading(false);
+    }
   };
 
-  // ── Component tab data builder ──
-  const getComponentData = (sig) => {
-    if (!sig) return {};
-    return {
-      risk: {
-        title: 'Risk Analysis',
-        score: sig.components.risk || 0,
-        color: (sig.components.risk || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-        kpis: sig.risks.length > 0
-          ? sig.risks.map(r => ({ label: r.category || r, value: typeof r === 'object' ? `Severity: ${(r.severity || 0).toFixed(2)} | Count: ${r.count || 0}` : 'Flagged' }))
-          : [{ label: 'Risk Status', value: Math.abs(sig.components.risk || 0) > 0.5 ? 'Elevated Risk' : 'Moderate' }],
-        description: 'Scans SEC Filing Item 1A for risk keywords (regulatory, litigation, supply chain, cyber, macro). Higher severity → more negative score.',
-      },
-      tone: {
-        title: 'Tone Trend',
-        score: sig.components.tone || 0,
-        color: (sig.components.tone || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-        kpis: [
-          { label: 'Direction', value: sig.tone.direction || 'Stable' },
-          { label: 'Delta', value: (sig.tone.delta || 0).toFixed(3) },
-        ],
-        description: 'Measures the change in management sentiment between earnings calls using FinBERT NLP. Positive delta = improving outlook.',
-      },
-      valuation: {
-        title: 'Valuation Gap',
-        score: sig.components.valuation || 0,
-        color: (sig.components.valuation || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-        kpis: [
-          { label: 'Valuation Gap %', value: sig.valuation.valuation_gap_pct != null ? `${(sig.valuation.valuation_gap_pct * 100).toFixed(1)}%` : 'N/A' },
-          { label: 'Intrinsic Value', value: sig.valuation.intrinsic_value != null ? `$${sig.valuation.intrinsic_value.toFixed(2)}` : 'N/A' },
-          { label: 'Market Price', value: sig.valuation.current_price != null ? `$${sig.valuation.current_price.toFixed(2)}` : 'N/A' },
-          { label: 'Status', value: (sig.components.valuation || 0) > 0 ? 'Undervalued' : (sig.components.valuation || 0) < 0 ? 'Overvalued' : 'Fair Value' },
-        ],
-        description: 'Compares intrinsic value (from DCF model using revenue × 12% FCF proxy) vs current market price. Positive = undervalued opportunity.',
-        tool: 'run_dcf + yfinance',
-      },
-      growth: {
-        title: 'Growth Metrics',
-        score: sig.components.growth || 0,
-        color: (sig.components.growth || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-        kpis: [
-          { label: 'YoY Revenue Growth', value: sig.components.growth !== 0 ? `${(sig.components.growth * 40).toFixed(1)}%` : 'N/A' },
-          { label: 'Normalized Score', value: (sig.components.growth || 0).toFixed(3) },
-        ],
-        description: 'Year-over-year revenue growth, normalized (40%+ YoY caps at +1.0).',
-      },
-      news: {
-        title: 'News Sentiment',
-        score: sig.components.news || 0,
-        color: (sig.components.news || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-        kpis: [
-          { label: 'Direction', value: (sig.components.news || 0) > 0 ? 'Bullish' : (sig.components.news || 0) < 0 ? 'Bearish' : 'Neutral' },
-          { label: 'Score', value: (sig.components.news || 0).toFixed(3) },
-        ],
-        description: 'Live news sentiment from NewsAPI headlines. Positive = bullish, negative = bearish.',
-      },
-    };
-  };
-
-  const componentKeys = ['risk', 'tone', 'valuation', 'growth', 'news'];
+  const activeTool = useMemo(() => {
+    return decResult?.tools?.find((t) => t.id === activeToolId) || null;
+  }, [decResult, activeToolId]);
 
   return (
-    <div className="finsight-container">
-      {/* HEADER */}
-      <header className="finsight-header glass-panel">
-        <div className="header-brand">
-          <h1>FinSight</h1>
-          <span className="brand-sub">Intelligence Terminal</span>
+    <div className="terminal-root">
+      <header className="terminal-header">
+        <div>
+          <div className="brand-title">FinSignal AI</div>
+          <div className="brand-subtitle">Institutional Financial Intelligence Dashboard</div>
         </div>
-        <nav className="app-tabs">
-          <button className={`app-tab ${appTab === 'decision' ? 'active' : ''}`} onClick={() => setAppTab('decision')}>
-            Decision Analysis
-          </button>
-          <button className={`app-tab ${appTab === 'research' ? 'active' : ''}`} onClick={() => setAppTab('research')}>
-            Research Mode
-          </button>
-        </nav>
+        <div className="header-tabs">
+          <button className={tab === 'decision' ? 'header-tab active' : 'header-tab'} onClick={() => setTab('decision')}>Decision Mode</button>
+          <button className={tab === 'research' ? 'header-tab active' : 'header-tab'} onClick={() => setTab('research')}>Research Mode</button>
+        </div>
       </header>
 
-      {/* ═══════════ TAB 1: DECISION ANALYSIS ═══════════ */}
-      {appTab === 'decision' && (
-        <div className="tab-view fade-in-up">
-          <div className="decision-controls glass-panel">
-            <div className="control-row">
-              <div className="control-item lg">
-                <label>TICKER</label>
-                <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} placeholder="AAPL" />
-              </div>
-              <div className="control-item xl">
-                <label>EVIDENCE STRICTNESS: {strictness}%</label>
-                <input type="range" min="0" max="100" value={strictness} onChange={e => setStrictness(e.target.value)} className="strictness-slider" />
-                <div className="strictness-presets">
-                  <button className={strictness == 30 ? 'preset active' : 'preset'} onClick={() => setStrictness(30)}>Lenient</button>
-                  <button className={strictness == 50 ? 'preset active' : 'preset'} onClick={() => setStrictness(50)}>Balanced</button>
-                  <button className={strictness == 70 ? 'preset active' : 'preset'} onClick={() => setStrictness(70)}>Strict</button>
-                  <button className={strictness == 90 ? 'preset active' : 'preset'} onClick={() => setStrictness(90)}>Maximum</button>
-                </div>
-              </div>
-              <button className="run-btn decision-run" onClick={runDecision} disabled={decLoading}>
-                {decLoading ? <span className="spinner"></span> : 'GENERATE SIGNAL'}
-              </button>
+      {tab === 'decision' && (
+        <section className="panel-block">
+          <div className="control-panel">
+            <div className="control-group">
+              <label>Ticker</label>
+              <select value={ticker} onChange={(e) => setTicker(e.target.value)}>
+                {TICKERS.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
+            <div className="control-group control-wide">
+              <label>Evidence Strictness: {strictness}</label>
+              <input type="range" min="0" max="100" value={strictness} onChange={(e) => setStrictness(Number(e.target.value))} />
+            </div>
+            <button className="run-btn" onClick={runDecision} disabled={decLoading}>{decLoading ? 'Running...' : 'Run Analysis'}</button>
           </div>
 
-          {decError && <div className="error-banner">⚠️ {decError}</div>}
+          {decError && <div className="error-banner">{decError}</div>}
 
-          {decLoading && (
-            <div className="thinking-container glass-panel fade-in-up">
-              <div className="radar-spinner"></div>
-              <h2>System is analyzing {ticker}...</h2>
-              <p className="progress-text">{decProgress}</p>
-            </div>
-          )}
-
-          {decResult?.signal && !decLoading && (
-            <div className="decision-results fade-in-up">
-
-              {/* ── HERO KPI STRIP ── */}
-              <div className="kpi-strip">
-                <div className={`kpi-card kpi-decision kpi-${decResult.signal.decision.toLowerCase()}`}>
-                  <span className="kpi-label">DECISION</span>
-                  <span className="kpi-value">{decResult.signal.decision}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">SIGNAL STRENGTH</span>
-                  <span className="kpi-value" style={{ color: decResult.signal.strength >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                    {decResult.signal.strength > 0 ? '+' : ''}{decResult.signal.strength.toFixed(3)}
-                  </span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">RECOMMENDATION</span>
-                  <span className="kpi-value rec-value">{decResult.signal.recommendation}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">CONFIDENCE</span>
-                  <span className="kpi-value">{(decResult.signal.confidence * 100).toFixed(0)}%</span>
-                </div>
+          {decResult && (
+            <>
+              <div className="kpi-grid kpi-large">
+                <article className={`kpi-card ${actionClass(decResult.action)}`}>
+                  <div className="kpi-label">Decision Signal</div>
+                  <div className="kpi-value">{decResult.action}</div>
+                  <div className="kpi-note">Rule output from weighted multi-tool signal.</div>
+                </article>
+                <article className={`kpi-card ${signalClass(decResult.score)}`}>
+                  <div className="kpi-label">Signal Score</div>
+                  <div className="kpi-value">{decResult.score >= 0 ? '+' : ''}{decResult.score.toFixed(4)}</div>
+                  <div className="kpi-note">Confidence-weighted blend of independent tool signals.</div>
+                </article>
+                <article className="kpi-card">
+                  <div className="kpi-label">Confidence</div>
+                  <div className="kpi-value">{(decResult.confidence * 100).toFixed(1)}%</div>
+                  <div className="kpi-note">Based on evidence quality, model reliability, and uncertainty penalties.</div>
+                </article>
               </div>
 
-              {/* ── ASSUMPTIONS ── */}
-              <div className="assumptions-bar glass-panel">
-                <span className="assumptions-label">ASSUMPTIONS</span>
-                <span>Strictness: {strictness}% · Fiscal Year: 2024 · Ticker: {ticker} · Decision Threshold: ACT ≥ 0.35 & Conf ≥ 55%</span>
+              <div className="policy-bar">{decResult.policy}</div>
+
+              <h3 className="section-title">Tool Analysis</h3>
+              <div className="tool-grid">
+                {decResult.tools.map((tool) => (
+                  <button
+                    key={tool.id}
+                    className={activeToolId === tool.id ? `tool-card active ${signalClass(tool.score)}` : `tool-card ${signalClass(tool.score)}`}
+                    onClick={() => setActiveToolId(tool.id)}
+                  >
+                    <div className="tool-name">{tool.name}</div>
+                    <div className="tool-score">{tool.score >= 0 ? '+' : ''}{tool.score.toFixed(3)}</div>
+                    <div className="tool-meta">Conf {(tool.confidence * 100).toFixed(0)}% | {tool.metric}</div>
+                  </button>
+                ))}
               </div>
 
-              {/* ── COMPONENT SUB-TABS ── */}
-              <div className="component-tabs">
-                {componentKeys.map(key => {
-                  const sc = decResult.signal.components[key] || 0;
-                  return (
-                    <button
-                      key={key}
-                      className={`comp-tab ${activeComponent === key ? 'active' : ''}`}
-                      onClick={() => setActiveComponent(key)}
-                    >
-                      <span className="comp-tab-name">{key}</span>
-                      <span className="comp-tab-score" style={{ color: sc >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                        {sc > 0 ? '+' : ''}{sc.toFixed(2)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* ── ACTIVE COMPONENT CONTENT ── */}
-              {(() => {
-                const data = getComponentData(decResult.signal);
-                const comp = data[activeComponent];
-                if (!comp) return null;
-                return (
-                  <div className="component-detail glass-panel fade-in-up" key={activeComponent}>
-                    <div className="comp-detail-header">
-                      <h3>{comp.title}</h3>
-                      <div className="comp-score-big" style={{ color: comp.color }}>
-                        {comp.score > 0 ? '+' : ''}{comp.score.toFixed(3)}
-                      </div>
-                    </div>
-                    <p className="comp-description">{comp.description}</p>
-
-                    <div className="comp-kpi-grid">
-                      {comp.kpis.map((kpi, i) => (
-                        <div key={i} className="comp-kpi-card">
-                          <span className="comp-kpi-label">{kpi.label}</span>
-                          <span className="comp-kpi-value">{kpi.value}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="progress-track lg-track">
-                      <div className="progress-fill" style={{
-                        width: `${Math.max(3, Math.abs(comp.score) * 100)}%`,
-                        backgroundColor: comp.color,
-                      }}></div>
-                    </div>
-
-                    {/* Evidence for this component */}
-                    {decResult.evidence && decResult.evidence.length > 0 && (
-                      <div className="comp-evidence">
-                        <h4 className="section-label" style={{ marginTop: '1.5rem' }}>Supporting Evidence</h4>
-                        <div className="evidence-grid compact">
-                          {decResult.evidence.slice(0, 4).map((item, idx) => (
-                            <div key={idx} className="evidence-card clickable" onClick={() => setSelectedEvidence(item)}>
-                              <div className="evidence-meta">
-                                <span className="source-badge">{item.source_type && item.source_type !== 'unknown' ? item.source_type.toUpperCase() : 'DOCUMENT'}</span>
-                              </div>
-                              <p className="evidence-text">
-                                "{item.text?.length > 120 ? item.text.substring(0, 120) + '...' : item.text}"
-                              </p>
-                              <div className="evidence-footer">
-                                <span>{item.source || 'Knowledge Base'}</span>
-                                <span className="click-hint">Click to expand →</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+              {activeTool && (
+                <div className="tool-expanded">
+                  <div className="tool-expanded-header">
+                    <h4>{activeTool.name}</h4>
+                    <span className={`tag ${signalClass(activeTool.score)}`}>{activeTool.metric}</span>
                   </div>
-                );
-              })()}
-            </div>
-          )}
-        </div>
-      )}
 
-      {/* ═══════════ TAB 2: RESEARCH MODE ═══════════ */}
-      {appTab === 'research' && (
-        <div className="tab-view fade-in-up">
-          <div className="research-controls glass-panel">
-            <div className="control-row">
-              <div className="control-item">
-                <label>TICKER</label>
-                <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} placeholder="AAPL" />
-              </div>
-              <div className="control-item">
-                <label>TOOL MODE</label>
-                <select value={resMode} onChange={e => setResMode(e.target.value)}>
-                  <option value="auto">Auto-Detect</option>
-                  <option value="valuation">DCF Valuation</option>
-                  <option value="risk_analysis">Risk Analysis</option>
-                  <option value="relative_valuation">Multiples (Relative)</option>
-                  <option value="compute_metric">Fact Extraction</option>
-                  <option value="mba_framework">MBA Framework</option>
-                  <option value="comparative_analysis">Comparative</option>
-                  <option value="lookup_numeric">Data Search</option>
-                  <option value="lookup_text_management">Filing/Transcript Search</option>
-                  <option value="lookup_text_news">News Search</option>
-                  <option value="explanatory_reasoning">Financial Reasoning</option>
-                </select>
-              </div>
-              <div className="control-item xl">
-                <label>STRICTNESS: {strictness}%</label>
-                <input type="range" min="0" max="100" value={strictness} onChange={e => setStrictness(e.target.value)} className="strictness-slider" />
-              </div>
-            </div>
-          </div>
+                  <div className="detail-grid">
+                    <article className="detail-card">
+                      <h5>How Score Was Calculated</h5>
+                      <p>{activeTool.calc}</p>
+                      <code>{activeTool.formula}</code>
+                    </article>
+                    <article className="detail-card">
+                      <h5>Confidence Calculation</h5>
+                      <p>Base confidence: {(activeTool.confidence * 100).toFixed(1)}%</p>
+                      <p>Evidence agreement: {(activeTool.evidenceAgreement * 100).toFixed(1)}%</p>
+                      <p>Source reliability: {activeTool.sourceReliability}</p>
+                      <p>Model uncertainty: {activeTool.uncertainty}</p>
+                    </article>
+                    <article className="detail-card">
+                      <h5>Contributing Factors</h5>
+                      <pre>{JSON.stringify(activeTool.factors, null, 2)}</pre>
+                    </article>
+                    <article className="detail-card">
+                      <h5>Tool Metadata</h5>
+                      <pre>{JSON.stringify(activeTool.toolMeta || {}, null, 2)}</pre>
+                    </article>
+                  </div>
 
-          <section className="query-section">
-            <input type="text" className="main-search-input glass-input"
-              placeholder="Ask a question (e.g., 'What is Apple's intrinsic value based on DCF?')"
-              value={resQuery} onChange={e => setResQuery(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && runResearch()}
-            />
-            <button className="run-btn" onClick={runResearch} disabled={resLoading}>
-              {resLoading ? <span className="spinner"></span> : 'RUN QUERY'}
-            </button>
-          </section>
-
-          {resError && <div className="error-banner">⚠️ {resError}</div>}
-          {resLoading && (
-            <div className="thinking-container glass-panel fade-in-up">
-              <div className="radar-spinner"></div>
-              <h2>Researching...</h2>
-              <p className="progress-text">Executing {resMode} pipeline for {ticker}...</p>
-            </div>
-          )}
-
-          {resResult && !resLoading && (
-            <div className="research-results fade-in-up">
-              <div className="answer-panel glass-panel">
-                <div className="panel-header">
-                  <h3 className="section-label">Answer — {resResult.mode}</h3>
-                  <span className={`status-indicator indicator-${resResult.action}`}>{resResult.action.toUpperCase()}</span>
-                </div>
-                {resResult.metric && <div className="primary-metric">{resResult.metric}</div>}
-                <p className="answer-text">{resResult.answer}</p>
-                {resResult.math && <div className="math-trace"><code>{resResult.math}</code></div>}
-              </div>
-              {resResult.evidence.length > 0 && (
-                <div className="evidence-section">
-                  <h3 className="section-label">Evidence Used ({resResult.evidence.length})</h3>
+                  <h5 className="sub-title">Evidence Sources</h5>
                   <div className="evidence-grid">
-                    {resResult.evidence.map((item, idx) => (
-                      <div key={idx} className="evidence-card clickable" onClick={() => setSelectedEvidence(item)}>
-                        <div className="evidence-meta">
-                          <span className="source-badge">{item.source_type && item.source_type !== 'unknown' ? item.source_type.toUpperCase() : 'DOCUMENT'}</span>
-                          {item.ticker && <span className="source-ticker">{item.ticker}</span>}
-                        </div>
-                        <p className="evidence-text">"{item.text?.length > 150 ? item.text.substring(0, 150) + '...' : item.text}"</p>
-                        <div className="evidence-footer">
-                          <span>{item.source || 'Knowledge Base'}</span>
-                          <span className="click-hint">Click to expand →</span>
-                        </div>
-                      </div>
-                    ))}
+                    {activeTool.evidence.map((ev, idx) => {
+                      const meta = sourceMeta(ev);
+                      return (
+                        <article key={`${activeTool.id}-${idx}`} className="evidence-card" onClick={() => setSelectedEvidence(ev)}>
+                          <div className="evidence-top">
+                            <span className="source-pill">{meta.icon}</span>
+                            <span className="source-ref">{meta.ref}</span>
+                          </div>
+                          <p>{(ev.text || '').slice(0, 140)}{(ev.text || '').length > 140 ? '...' : ''}</p>
+                          <button className="open-source-btn" type="button">Open Source</button>
+                        </article>
+                      );
+                    })}
                   </div>
                 </div>
               )}
-            </div>
+            </>
           )}
-        </div>
+        </section>
       )}
 
-      {/* ═══════════ EVIDENCE MODAL ═══════════ */}
-      {selectedEvidence && (
-        <div className="modal-overlay" onClick={() => setSelectedEvidence(null)}>
-          <div className="modal-content glass-panel" onClick={e => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setSelectedEvidence(null)}>×</button>
-            <div className="modal-header">
-              <h3>Evidence Source</h3>
-              <div className="evidence-meta" style={{ justifyContent: 'flex-start', gap: '10px' }}>
-                <span className="source-badge">{selectedEvidence.source_type && selectedEvidence.source_type !== 'unknown' ? selectedEvidence.source_type.toUpperCase() : 'DOCUMENT'}</span>
-                {selectedEvidence.ticker && <span className="source-ticker">{selectedEvidence.ticker}</span>}
-              </div>
+      {tab === 'research' && (
+        <section className="panel-block">
+          <div className="control-panel">
+            <div className="control-group">
+              <label>Ticker</label>
+              <select value={ticker} onChange={(e) => setTicker(e.target.value)}>
+                {TICKERS.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
-            <div className="modal-body">
-              <p className="full-evidence-text">{selectedEvidence.text}</p>
+            <div className="control-group">
+              <label>Mode</label>
+              <select value={resMode} onChange={(e) => setResMode(e.target.value)}>
+                {RESEARCH_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
             </div>
-            <div className="modal-footer">
-              <span className="modal-source-path">{selectedEvidence.source || 'Knowledge Base'}</span>
+            <div className="control-group control-wide">
+              <label>Evidence Strictness: {strictness}</label>
+              <input type="range" min="0" max="100" value={strictness} onChange={(e) => setStrictness(Number(e.target.value))} />
             </div>
           </div>
+
+          <div className="query-row">
+            <input
+              value={resQuery}
+              onChange={(e) => setResQuery(e.target.value)}
+              placeholder="Ask a research question with evidence traceability"
+              onKeyDown={(e) => e.key === 'Enter' && runResearch()}
+            />
+            <button className="run-btn" onClick={runResearch} disabled={resLoading}>{resLoading ? 'Running...' : 'Run Query'}</button>
+          </div>
+
+          {resError && <div className="error-banner">{resError}</div>}
+
+          {resResult && (
+            <>
+              <article className="answer-card">
+                <h3 className="section-title">Analysis Summary</h3>
+                <p>{resResult.answer}</p>
+              </article>
+
+              <div className="kpi-grid kpi-compact">
+                <article className="kpi-card"><div className="kpi-label">Evidence Score</div><div className="kpi-small">{resResult.evidenceScore.toFixed(2)}</div></article>
+                <article className="kpi-card"><div className="kpi-label">Confidence</div><div className="kpi-small">{(resResult.confidence * 100).toFixed(1)}%</div></article>
+                <article className={`kpi-card ${actionClass(resResult.action)}`}><div className="kpi-label">Action</div><div className="kpi-small">{resResult.action}</div></article>
+                <article className="kpi-card"><div className="kpi-label">Rationale</div><div className="kpi-small">{resResult.rationale}</div></article>
+              </div>
+
+              <section className="evidence-panel">
+                <div className="evidence-tabs">
+                  <button className={evidenceTab === 'summary' ? 'ev-tab active' : 'ev-tab'} onClick={() => setEvidenceTab('summary')}>Source Summary</button>
+                  <button className={evidenceTab === 'table' ? 'ev-tab active' : 'ev-tab'} onClick={() => setEvidenceTab('table')}>Structured Table View</button>
+                  <button className={evidenceTab === 'context' ? 'ev-tab active' : 'ev-tab'} onClick={() => setEvidenceTab('context')}>Expandable Context</button>
+                </div>
+
+                {evidenceTab === 'summary' && (
+                  <div className="evidence-grid">
+                    {resResult.evidence.map((ev, idx) => {
+                      const meta = sourceMeta(ev);
+                      return (
+                        <article key={idx} className="evidence-card" onClick={() => setSelectedEvidence(ev)}>
+                          <div className="evidence-top">
+                            <span className="source-pill">{meta.icon}</span>
+                            <span className="source-ref">{meta.ref}</span>
+                          </div>
+                          <p>{(ev.text || '').slice(0, 140)}{(ev.text || '').length > 140 ? '...' : ''}</p>
+                          <div className="evidence-bottom">
+                            <span>Conf {(Number(ev.score || ev.confidence || 0.5) * 100).toFixed(0)}%</span>
+                            <button className="open-source-btn" type="button">Open Source</button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {evidenceTab === 'table' && (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Citation</th>
+                          <th>Snippet</th>
+                          <th>Confidence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resResult.evidence.map((ev, idx) => {
+                          const meta = sourceMeta(ev);
+                          return (
+                            <tr key={`row-${idx}`}>
+                              <td>{meta.icon}</td>
+                              <td>{meta.ref}</td>
+                              <td>{(ev.text || '').slice(0, 90)}{(ev.text || '').length > 90 ? '...' : ''}</td>
+                              <td>{(Number(ev.score || ev.confidence || 0.5) * 100).toFixed(0)}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {evidenceTab === 'context' && (
+                  <div className="context-list">
+                    {resResult.evidence.map((ev, idx) => (
+                      <details key={`ctx-${idx}`}>
+                        <summary>{sourceMeta(ev).ref} | {(ev.source || 'Document')}</summary>
+                        <p>{ev.text || 'No text available.'}</p>
+                        <button className="open-source-btn" type="button" onClick={() => setSelectedEvidence(ev)}>Open Source</button>
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </section>
+      )}
+
+      {selectedEvidence && (
+        <div className="drawer-overlay" onClick={() => setSelectedEvidence(null)}>
+          <aside className="doc-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-head">
+              <h4>Document Preview</h4>
+              <button onClick={() => setSelectedEvidence(null)} className="close-btn" type="button">Close</button>
+            </div>
+            <div className="drawer-meta">{selectedEvidence.source || 'Source document'} | {sourceMeta(selectedEvidence).ref}</div>
+            <div className="drawer-body">{selectedEvidence.text || 'No preview text available.'}</div>
+          </aside>
         </div>
       )}
     </div>
   );
-};
+}
 
 export default FinSightTerminal;

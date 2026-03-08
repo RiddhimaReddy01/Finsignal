@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from demo_reporting import build_demo_signal_report
+from decision_engine import build_quant_decision
 from news_ingestion import NewsIngestionClient
 from nlp_signals import (
     classify_news_catalysts,
@@ -162,10 +163,20 @@ def run_hackathon_signal_layer(
         contradiction_penalty=0.0,
     )
     score_obj = to_dict(score)
-    decision_action = signal_action_from_score(
+    quant_decision = build_quant_decision(
+        base_result=base_result,
+        risk_severity_avg=risk_avg,
+        tone_delta=tone_delta if current_transcript_text and prior_transcript_text else None,
+        valuation_gap_pct=valuation_gap_pct,
+        revenue_growth_yoy=revenue_growth_yoy,
+        news_direction_score=avg_news_score,
+        news_items=news_summary,
+        evidence_count=len(citations),
+    )
+    decision_action = str(quant_decision.get("action") or signal_action_from_score(
         signal_score=float(score_obj.get("signal_score", 0.0)),
         confidence=float(score_obj.get("confidence", 0.0)),
-    )
+    ))
 
     report = build_demo_signal_report(
         ticker=ticker,
@@ -184,8 +195,9 @@ def run_hackathon_signal_layer(
     enriched["hackathon_signal_score"] = score_obj
     enriched["hackathon_signal_decision"] = {
         "action": decision_action,
-        "policy": "ACT if confidence>=0.55 and score>=0.35; WATCH if score>=0.10; else NO_ACT",
+        "policy": "confidence_weighted_regime_adjusted_decision",
     }
+    enriched["quant_decision"] = quant_decision
     enriched["hackathon_signal_report"] = report.to_dict()
     enriched["hackathon_signal_markdown"] = report.to_markdown()
     return enriched
