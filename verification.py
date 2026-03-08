@@ -1464,15 +1464,28 @@ _SCALE = {
 
 def _to_float(num_str: str) -> float:
     s = (num_str or "").strip()
+    if not s:
+        return 0.0
+    
+    # Handle accounting format: (123.45)
     neg = False
-    if s.startswith("(") and s.endswith(")"):
+    if s.startswith("(") and (s.endswith(")") or s.endswith("]")):
         neg = True
         s = s[1:-1].strip()
-    if s.startswith("-"):
+    elif s.startswith("-"):
         neg = True
         s = s[1:].strip()
-    val = float(s.replace(",", ""))
-    return -val if neg else val
+    
+    # Remove common non-numeric junk that might have slipped into the 'num' group
+    s = re.sub(r"[^\d\.]", "", s) # Only keep digits and dots
+    if not s or s == ".":
+        return 0.0
+    
+    try:
+        val = float(s)
+        return -val if neg else val
+    except ValueError:
+        return 0.0
 
 
 def _global_scale_hint(text: str) -> float:
