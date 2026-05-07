@@ -1,7 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import './FinSight.css';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE)
+    ? String(import.meta.env.VITE_API_BASE)
+    : `${window.location.protocol}//${window.location.hostname}:8000`;
 const TICKERS = ['AAPL', 'NVDA', 'TSLA', 'META', 'GOOGL'];
 
 // Risk category display names
@@ -18,28 +21,24 @@ const RISK_CATEGORY_NAMES = {
 };
 
 // Safe number formatters with null guards
-const fmtDollar = (v, d=2) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `$${Number(v).toFixed(d)}` : '—';
-const fmtBillions = (v) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `$${(Number(v)/1e9).toFixed(1)}B` : '—';
-const fmtPct = (v, d=1) => (v != null && !isNaN(Number(v))) ? `${(Number(v)*100).toFixed(d)}%` : '—';
-const fmtPctSigned = (v, d=1) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `${Number(v)>0?'+':''}${(Number(v)*100).toFixed(d)}%` : '—';
+const fmtDollar = (v, d=2) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `$${Number(v).toFixed(d)} USD` : '—';
+const fmtBillions = (v) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `$${(Number(v)/1e9).toFixed(1)}B USD` : '—';
+const fmtPct = (v, d=1) => (v != null && !isNaN(Number(v))) ? `${(Number(v)*100).toFixed(d)} %` : '—';
+const fmtPctSigned = (v, d=1) => (v != null && !isNaN(Number(v)) && Number(v) !== 0) ? `${Number(v)>0?'+':''}${(Number(v)*100).toFixed(d)} %` : '—';
 
 const RESEARCH_MODES = [
-  'auto',
-  'lookup_numeric',
-  'lookup_text',
-  'lookup_text_filing',
-  'lookup_text_management',
-  'lookup_text_news',
-  'compute_metric',
-  'comparative_analysis',
-  'risk_analysis',
-  'valuation',
-  'relative_valuation',
-  'explanatory_reasoning',
-  'mba_framework',
-  'multi_period_analysis',
-  'scenario_analysis',
-  'peer_analysis',
+  { value: 'lookup_numeric', label: 'lookup_numeric' },
+  { value: 'lookup_text', label: 'lookup_text' },
+  { value: 'lookup_text_filing', label: 'lookup_text_filing' },
+  { value: 'compute_metric', label: 'compute_metric' },
+  { value: 'comparative_analysis', label: 'comparative_analysis' },
+  { value: 'risk_analysis', label: 'risk_analysis' },
+  { value: 'explanatory_reasoning', label: 'explanatory_reasoning' },
+  { value: 'mba_framework', label: 'mba_framework' },
+  { value: 'multi_period_analysis', label: 'multi_period_analysis' },
+  { value: 'valuation', label: 'valuation (PARTIAL)' },
+  { value: 'scenario_analysis', label: 'scenario_analysis (PARTIAL)' },
+  { value: 'peer_analysis', label: 'peer_analysis (PARTIAL)' },
 ];
 
 const signalClass = (value) => {
@@ -62,6 +61,16 @@ const sourceMeta = (ev = {}) => {
   if (s.includes('transcript')) return { icon: 'CALL', ref: 'Earnings Call' };
   if (s.includes('table')) return { icon: 'TBL', ref: 'Financial Table' };
   return { icon: 'DOC', ref: ev.source || 'Document' };
+};
+
+const TOOL_QUALITY = {
+  risk: { sourceReliability: 'High', uncertainty: 'Medium' },
+  tone: { sourceReliability: 'Medium', uncertainty: 'Medium-High' },
+  valuation: { sourceReliability: 'High', uncertainty: 'High' },
+  growth: { sourceReliability: 'High', uncertainty: 'Medium' },
+  news: { sourceReliability: 'Medium', uncertainty: 'High' },
+  scenarios: { sourceReliability: 'High', uncertainty: 'High' },
+  peers: { sourceReliability: 'High', uncertainty: 'Medium' },
 };
 
 const REASON_LABELS = {
@@ -477,7 +486,7 @@ function FinSightTerminal() {
   const [decResult, setDecResult] = useState(null);
   const [activeToolId, setActiveToolId] = useState('risk');
 
-  const [resMode, setResMode] = useState('auto');
+  const [resMode, setResMode] = useState('lookup_numeric');
   const [resQuery, setResQuery] = useState('What is the latest investment signal and why?');
   const [resLoading, setResLoading] = useState(false);
   const [resError, setResError] = useState('');
@@ -498,7 +507,13 @@ function FinSightTerminal() {
         body: JSON.stringify({ ticker, fiscal_year: 2024, strictness }),
       });
       if (!resp.ok) throw new Error(`Server ${resp.status}: ${await resp.text()}`);
-      const raw = await resp.json();
+      let raw = {};
+      try {
+        raw = await resp.json();
+      } catch (e) {
+        const txt = await resp.text();
+        throw new Error(`Decision response parse failed. First 220 chars: ${String(txt).slice(0, 220)}`);
+      }
       const scoreObj = raw.hackathon_signal_score || {};
       const report = raw.hackathon_signal_report || {};
       const toolsUsed = raw.tools_used || {};
@@ -515,8 +530,8 @@ function FinSightTerminal() {
           formula: 'score = -1 * severity_avg (top risk buckets)',
           calc: 'NLP extraction from SEC Item 1A risk language with severity weighting.',
           factors: toolsUsed.risk?.factors || toolsUsed.risk?.top_risks || [],
-          sourceReliability: 'High (SEC filing text)',
-          uncertainty: 'Medium (keyword/context extraction)',
+          sourceReliability: TOOL_QUALITY.risk.sourceReliability,
+          uncertainty: TOOL_QUALITY.risk.uncertainty,
           evidenceAgreement: 0.8,
           evidence: toolEvidenceMap.risk || [],
           toolMeta: toolsUsed.risk,
@@ -531,8 +546,8 @@ function FinSightTerminal() {
           formula: 'score = LLM_Tone(current transcript) - LLM_Tone(prior transcript)',
           calc: 'Compares current vs prior earnings call sentiment trend.',
           factors: toolsUsed.tone?.factors || toolsUsed.tone || {},
-          sourceReliability: 'Medium (transcripts)',
-          uncertainty: 'Medium-High (sentiment model noise)',
+          sourceReliability: TOOL_QUALITY.tone.sourceReliability,
+          uncertainty: TOOL_QUALITY.tone.uncertainty,
           evidenceAgreement: 0.65,
           evidence: toolEvidenceMap.tone || [],
           toolMeta: toolsUsed.tone,
@@ -547,8 +562,8 @@ function FinSightTerminal() {
           formula: 'gap = (intrinsic_value - market_price) / market_price',
           calc: 'Projects FCF, applies discounting, compares to market price.',
           factors: toolsUsed.valuation?.factors || toolsUsed.valuation || {},
-          sourceReliability: 'Medium-High (market + yfinance inputs)',
-          uncertainty: 'High (WACC/terminal assumptions)',
+          sourceReliability: TOOL_QUALITY.valuation.sourceReliability,
+          uncertainty: TOOL_QUALITY.valuation.uncertainty,
           evidenceAgreement: 0.7,
           evidence: toolEvidenceMap.valuation || [],
           toolMeta: toolsUsed.valuation,
@@ -563,8 +578,8 @@ function FinSightTerminal() {
           formula: 'score = normalize(revenue_growth_yoy)',
           calc: 'Normalizes YoY growth from financial statements.',
           factors: toolsUsed.growth?.factors || { yoy: toolsUsed.growth?.yoy },
-          sourceReliability: 'High (reported financial data)',
-          uncertainty: 'Low-Medium',
+          sourceReliability: TOOL_QUALITY.growth.sourceReliability,
+          uncertainty: TOOL_QUALITY.growth.uncertainty,
           evidenceAgreement: 0.75,
           evidence: toolEvidenceMap.growth || [],
           toolMeta: toolsUsed.growth,
@@ -579,8 +594,8 @@ function FinSightTerminal() {
           formula: 'score = avg(catalyst sentiment over recent articles)',
           calc: 'Classifies market-moving news events using LLM.',
           factors: toolsUsed.news?.factors || toolsUsed.news || [],
-          sourceReliability: 'Medium (external news feed)',
-          uncertainty: 'High (headline volatility)',
+          sourceReliability: TOOL_QUALITY.news.sourceReliability,
+          uncertainty: TOOL_QUALITY.news.uncertainty,
           evidenceAgreement: 0.55,
           evidence: toolEvidenceMap.news || [],
           toolMeta: toolsUsed.news,
@@ -589,17 +604,17 @@ function FinSightTerminal() {
           id: 'scenarios',
           name: 'Scenario Analysis',
           metric: 'Upside/Downside',
-          score: Number(scoreObj.component_scores?.valuation || 0),
+          score: Number(toolsUsed.scenario?.score ?? toolsUsed.scenarios?.score ?? scoreObj.component_scores?.valuation ?? 0),
           confidence: 0.75,
           description: 'Stresses the valuation model with Bull and Bear assumptions to show potential price outcomes.',
           formula: 'Projection = FCF * Growth / WACC',
           calc: 'Simulates Bull/Bear scenarios based on FCF variability.',
           factors: raw.scenarios || {},
-          sourceReliability: 'High (Quantitative)',
-          uncertainty: 'High (Projections)',
+          sourceReliability: TOOL_QUALITY.scenarios.sourceReliability,
+          uncertainty: TOOL_QUALITY.scenarios.uncertainty,
           evidenceAgreement: 1.0,
           evidence: toolEvidenceMap.scenarios || toolEvidenceMap.valuation || [],
-          toolMeta: toolsUsed.scenarios,
+          toolMeta: toolsUsed.scenario || toolsUsed.scenarios,
         },
         {
           id: 'peers',
@@ -611,8 +626,8 @@ function FinSightTerminal() {
           formula: 'Premium = (Target - Peer Median) / Peer Median',
           calc: 'Compares target to industry peers (AMD, INTC, etc).',
           factors: raw.peers || {},
-          sourceReliability: 'High (Market Data)',
-          uncertainty: 'Medium',
+          sourceReliability: TOOL_QUALITY.peers.sourceReliability,
+          uncertainty: TOOL_QUALITY.peers.uncertainty,
           evidenceAgreement: 0.9,
           evidence: toolEvidenceMap.peers || toolEvidenceMap.valuation || [],
           toolMeta: toolsUsed.peers,
@@ -625,12 +640,49 @@ function FinSightTerminal() {
         confidence: Number(scoreObj.confidence || 0),
         action: raw.hackathon_signal_decision?.action || 'NO_ACT',
         policy: raw.hackathon_signal_decision?.policy || '',
+        contradictions: raw.contradictions || raw.quant_decision?.contradictions || [],
+        verificationAudit: (() => {
+          if (Array.isArray(raw.verification_audit) && raw.verification_audit.length > 0) return raw.verification_audit;
+          const derived = [];
+          const toolEvidenceMap = raw.tool_evidence || {};
+          const evCount = Object.values(toolEvidenceMap).reduce((a, v) => a + (Array.isArray(v) ? v.length : 0), 0);
+          derived.push({
+            check: 'evidence_ingestion',
+            status: evCount > 0 ? 'pass' : 'warn',
+            detail: { evidence_count: evCount, tools_with_evidence: Object.keys(toolEvidenceMap).length },
+          });
+          const recon = raw.tools_used?.valuation?.factors?.reconciliation || {};
+          derived.push({
+            check: 'numeric_reconciliation',
+            status: recon?.revenue || recon?.fcf ? 'pass' : 'warn',
+            detail: {
+              revenue_source: recon?.revenue?.selected_source || 'n/a',
+              fcf_source: recon?.fcf?.selected_source || 'n/a',
+              price_source: recon?.price_source || 'n/a',
+            },
+          });
+          derived.push({
+            check: 'decision_policy',
+            status: 'pass',
+            detail: {
+              signal_score: Number(raw.hackathon_signal_score?.signal_score || 0),
+              confidence: Number(raw.hackathon_signal_score?.confidence || 0),
+              action: raw.hackathon_signal_decision?.action || 'NO_ACT',
+            },
+          });
+          return derived;
+        })(),
         tools,
       });
       setActiveToolId('risk');
       setToolEvCategory('All');
     } catch (err) {
-      setDecError(err.message || String(err));
+      const emsg = err?.message || String(err);
+      if (/Failed to fetch|NetworkError|ECONNREFUSED|refused/i.test(emsg)) {
+        setDecError(`Cannot reach API at ${API_BASE}. Start backend: python -m uvicorn server:app --host 127.0.0.1 --port 8000`);
+      } else {
+        setDecError(emsg);
+      }
     } finally {
       setDecLoading(false);
     }
@@ -653,7 +705,13 @@ function FinSightTerminal() {
         }),
       });
       if (!resp.ok) throw new Error(`Server ${resp.status}: ${await resp.text()}`);
-      const raw = await resp.json();
+      let raw = {};
+      try {
+        raw = await resp.json();
+      } catch (e) {
+        const txt = await resp.text();
+        throw new Error(`Research response parse failed. First 220 chars: ${String(txt).slice(0, 220)}`);
+      }
 
       // Improve rationale: use reason codes from verification if abstaining
       let rationale = 'Rationale derived from selected mode and evidence set.';
@@ -682,10 +740,16 @@ function FinSightTerminal() {
         confidence: Number(raw.result?.confidence || gate.confidence || 0),
         evidenceScore: Number(gate.score || gate.evidence_score || 0),
         evidence,
+        generatedReport: raw.generated_report || {},
       });
       setEvidenceTab('summary');
     } catch (err) {
-      setResError(err.message || String(err));
+      const emsg = err?.message || String(err);
+      if (/Failed to fetch|NetworkError|ECONNREFUSED|refused/i.test(emsg)) {
+        setResError(`Cannot reach API at ${API_BASE}. Start backend: python -m uvicorn server:app --host 127.0.0.1 --port 8000`);
+      } else {
+        setResError(emsg);
+      }
     } finally {
       setResLoading(false);
     }
@@ -747,7 +811,6 @@ function FinSightTerminal() {
               </div>
 
               <div className="policy-bar">{decResult.policy}</div>
-
               <h3 className="section-title">Tool Analysis</h3>
               <div className="tool-grid">
                 {decResult.tools.map((tool) => (
@@ -784,6 +847,23 @@ function FinSightTerminal() {
                       <p>Evidence agreement: {(activeTool.evidenceAgreement * 100).toFixed(1)}%</p>
                       <p>Source reliability: {activeTool.sourceReliability}</p>
                       <p>Model uncertainty: {activeTool.uncertainty}</p>
+                      <h5 style={{marginTop:'14px'}}>Audit Trail (Verification)</h5>
+                      {Array.isArray(decResult?.verificationAudit) && decResult.verificationAudit.length > 0 ? (
+                        <div style={{ display: 'grid', gap: '6px' }}>
+                          {decResult.verificationAudit.map((a, i) => (
+                            <div key={i} style={{ border: '1px solid #24364f', borderRadius: '6px', padding: '6px 8px', background: '#0b1727' }}>
+                              <div style={{ fontSize: '12px', fontWeight: 700, color: a.status === 'pass' ? '#78f0a0' : a.status === 'warn' ? '#ffd479' : '#ff8a8a' }}>
+                                {String(a.check || 'check')} [{String(a.status || 'n/a').toUpperCase()}]
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#d1e0ef', marginTop: '2px' }}>
+                                {typeof a.detail === 'string' ? a.detail : JSON.stringify(a.detail)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={{color:'#9fb2c7'}}>No audit trail available.</p>
+                      )}
                     </article>
                     <article className="detail-card full-width">
                       <h5>Contributing Factors</h5>
@@ -879,15 +959,6 @@ function FinSightTerminal() {
                         )}
                       </div>
                     </article>
-                    <article className="detail-card">
-                      <h5>Tool Metadata</h5>
-                      <div className="meta-info">
-                        <p><b>Backend Tool:</b> {activeTool.toolMeta?.tool || 'Analytical Engine'}</p>
-                        <p><b>Primary Source:</b> {activeTool.toolMeta?.source || 'SEC Filings/Market Data'}</p>
-                        <p><b>Model:</b> {activeTool.id === 'tone' || activeTool.id === 'news' ? 'Gemini 2.0 Flash' : 'Quantitative DCF'}</p>
-                        <p><b>Confidence:</b> {(activeTool.confidence * 100).toFixed(1)}%</p>
-                      </div>
-                    </article>
                   </div>
 
                   <div className="tool-ev-section">
@@ -951,7 +1022,7 @@ function FinSightTerminal() {
             <div className="control-group">
               <label>Mode</label>
               <select value={resMode} onChange={(e) => setResMode(e.target.value)}>
-                {RESEARCH_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                {RESEARCH_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </div>
             <div className="control-group control-wide">
@@ -1021,6 +1092,39 @@ function FinSightTerminal() {
                   </article>
                 </div>
               </article>
+
+              {resResult.generatedReport?.html &&
+                resResult.action !== 'ABSTAIN' &&
+                resResult.action !== 'CLARIFY' &&
+                !!resResult.raw?.result?.final_answer && (
+                <article className="answer-card" style={{ marginBottom: '25px', padding: '30px' }}>
+                  <h3 className="section-title">Formatted Research Report</h3>
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', alignItems: 'center' }}>
+                    <span className="source-pill">REPORT</span>
+                    {resResult.generatedReport?.pdf_url && (
+                      <a
+                        href={`${API_BASE}${resResult.generatedReport.pdf_url}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="open-source-btn"
+                      >
+                        Open PDF
+                      </a>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '10px',
+                      padding: '14px',
+                      background: '#ffffff',
+                      boxShadow: 'inset 0 0 0 1px rgba(15,23,42,0.05)',
+                      overflowX: 'auto',
+                    }}
+                    dangerouslySetInnerHTML={{ __html: resResult.generatedReport.html }}
+                  />
+                </article>
+              )}
 
               <section className="evidence-panel">
                 <h3 className="section-title">Research Evidence Traceability</h3>

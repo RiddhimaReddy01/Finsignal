@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 try:
     import torch
@@ -54,6 +55,25 @@ class NewsCatalyst:
     direction: str
     score: float
     rationale: str
+
+
+@dataclass
+class RiskSentenceLabel:
+    sentence: str
+    categories: List[str]
+    rule_hits: int
+    classifier_risk_prob: float
+    hedge_hits: int
+
+
+@dataclass
+class RiskDiagnostics:
+    sentence_labels: List[RiskSentenceLabel]
+    category_rule_score: Dict[str, float]
+    category_classifier_score: Dict[str, float]
+    category_calibrated_score: Dict[str, float]
+    contradictions: List[Dict[str, Any]]
+    calibration_profile: Dict[str, Any]
 
 
 # ============================================================
@@ -345,6 +365,39 @@ NEGATIVE_HINT_WORDS = {
     "supply chain",
 }
 
+DEFAULT_RISK_CALIBRATION_PROFILE: Dict[str, Any] = {
+    "version": "demo_v1",
+    "global_bias": 0.0,
+    "global_scale": 1.0,
+    "weights": {"rule": 0.62, "classifier": 0.38},
+    "category_multipliers": {
+        "supply_chain": 1.0,
+        "regulatory": 1.05,
+        "competition": 0.95,
+        "macro": 1.0,
+        "geopolitical": 1.08,
+        "cyber": 1.02,
+        "liquidity": 1.05,
+        "customer_concentration": 0.95,
+        "litigation": 1.03,
+    },
+}
+
+
+def _load_risk_calibration_profile() -> Dict[str, Any]:
+    p = Path("data/risk_calibration.json")
+    if not p.exists():
+        return dict(DEFAULT_RISK_CALIBRATION_PROFILE)
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(obj, dict):
+            return dict(DEFAULT_RISK_CALIBRATION_PROFILE)
+        base = dict(DEFAULT_RISK_CALIBRATION_PROFILE)
+        base.update({k: v for k, v in obj.items() if k in ("version", "global_bias", "global_scale", "weights", "category_multipliers")})
+        return base
+    except Exception:
+        return dict(DEFAULT_RISK_CALIBRATION_PROFILE)
+
 
 def split_sentences(text: str) -> List[str]:
     text = str(text or "").strip()
@@ -476,47 +529,139 @@ def compare_tone(
     }
 
 
-def extract_risk_signals(text: str, max_snippets_per_category: int = 3) -> List[RiskSignal]:
+def extract_risk_signals(
+    text: str,
+    max_snippets_per_category: int = 3,
+    llm_client: Optional[Any] = None,
+    use_advanced_model: bool = True,
+) -> List[RiskSignal]:
     """
     Deterministic risk-category extraction from filing text, especially Item 1A.
     """
+    result = extract_risk_signals_with_diagnostics(
+        text=text,
+        max_snippets_per_category=max_snippets_per_category,
+        llm_client=llm_client,
+        use_advanced_model=use_advanced_model,
+    )
+    return result["signals"]
+
+
+def extract_risk_signals_with_diagnostics(
+    text: str,
+    max_snippets_per_category: int = 3,
+    llm_client: Optional[Any] = None,
+    use_advanced_model: bool = True,
+) -> Dict[str, Any]:
+    """
+    Sentence-level multi-label finance risk classifier + calibrated ensemble.
+    Returns both risk signals and diagnostics.
+    """
     sentences = split_sentences(text)
     if not sentences:
-        return []
+        return {"signals": [], "diagnostics": RiskDiagnostics([], {}, {}, {}, [], _load_risk_calibration_profile()).__dict__}
 
-    scores: Dict[str, Dict[str, Any]] = {}
+    calib = _load_risk_calibration_profile()
+    w_rule = float((calib.get("weights") or {}).get("rule", 0.62))
+    w_cls = float((calib.get("weights") or {}).get("classifier", 0.38))
+    g_bias = float(calib.get("global_bias", 0.0) or 0.0)
+    g_scale = float(calib.get("global_scale", 1.0) or 1.0)
+    multipliers = calib.get("category_multipliers") or {}
+
+    # Sentence-level multi-label classification.
+    sent_labels: List[RiskSentenceLabel] = []
+    cat_rule_hits: Dict[str, int] = {}
+    cat_snippets: Dict[str, List[str]] = {}
+    cat_classifier_scores: Dict[str, List[float]] = {}
+    total_sentences = max(len(sentences), 1)
 
     for sent in sentences:
         s = sent.lower()
+        matched_categories: List[str] = []
+        hit_total = 0
         for category, patterns in RISK_PATTERNS.items():
             hits = sum(1 for p in patterns if re.search(p, s))
-            if hits <= 0:
-                continue
+            if hits > 0:
+                matched_categories.append(category)
+                hit_total += hits
+                cat_rule_hits[category] = cat_rule_hits.get(category, 0) + hits
+                arr = cat_snippets.setdefault(category, [])
+                if len(arr) < max_snippets_per_category:
+                    arr.append(sent[:320])
 
-            rec = scores.setdefault(category, {"count": 0, "snippets": []})
-            rec["count"] += hits
+        cls_risk = 0.0
+        if use_advanced_model and sent.strip():
+            try:
+                tone = analyze_tone(sent, llm_client=llm_client if llm_client else None)
+                cls_risk = max(0.0, float(tone.negative_prob) - float(tone.positive_prob))
+            except Exception:
+                cls_risk = 0.0
 
-            if len(rec["snippets"]) < max_snippets_per_category:
-                rec["snippets"].append(sent[:320])
+        for c in matched_categories:
+            cat_classifier_scores.setdefault(c, []).append(cls_risk)
 
+        sent_labels.append(
+            RiskSentenceLabel(
+                sentence=sent[:320],
+                categories=matched_categories,
+                rule_hits=hit_total,
+                classifier_risk_prob=round(float(cls_risk), 4),
+                hedge_hits=count_hedge_words(sent),
+            )
+        )
+
+    rule_score: Dict[str, float] = {}
+    cls_score: Dict[str, float] = {}
+    calibrated: Dict[str, float] = {}
     out: List[RiskSignal] = []
-    total_sentences = max(len(sentences), 1)
+    contradictions: List[Dict[str, Any]] = []
 
-    for category, rec in scores.items():
-        density = rec["count"] / total_sentences
-        severity = min(1.0, math.log1p(rec["count"]) / 2.5 + density)
+    for category, hits in cat_rule_hits.items():
+        density = hits / total_sentences
+        r_score = min(1.0, math.log1p(hits) / 2.5 + density)
+        c_vals = cat_classifier_scores.get(category, [])
+        c_score = sum(c_vals) / max(len(c_vals), 1) if c_vals else 0.0
+        raw = (w_rule * r_score) + (w_cls * c_score)
+        mult = float(multipliers.get(category, 1.0) or 1.0)
+        sev = max(0.0, min(1.0, ((raw + g_bias) * g_scale) * mult))
 
+        if r_score >= 0.65 and c_score <= 0.20:
+            contradictions.append({
+                "type": "rule_vs_classifier_mismatch",
+                "category": category,
+                "severity": "medium",
+                "detail": {"rule_score": round(r_score, 4), "classifier_score": round(c_score, 4)},
+            })
+        if r_score <= 0.20 and c_score >= 0.55:
+            contradictions.append({
+                "type": "classifier_only_risk",
+                "category": category,
+                "severity": "low",
+                "detail": {"rule_score": round(r_score, 4), "classifier_score": round(c_score, 4)},
+            })
+
+        rule_score[category] = round(float(r_score), 4)
+        cls_score[category] = round(float(c_score), 4)
+        calibrated[category] = round(float(sev), 4)
         out.append(
             RiskSignal(
                 category=category,
-                severity=round(float(severity), 4),
-                count=int(rec["count"]),
-                snippets=list(rec["snippets"]),
+                severity=round(float(sev), 4),
+                count=int(hits),
+                snippets=list(cat_snippets.get(category, [])),
             )
         )
 
     out.sort(key=lambda x: (x.severity, x.count), reverse=True)
-    return out
+    diagnostics = RiskDiagnostics(
+        sentence_labels=sent_labels,
+        category_rule_score=rule_score,
+        category_classifier_score=cls_score,
+        category_calibrated_score=calibrated,
+        contradictions=contradictions,
+        calibration_profile=calib,
+    )
+    return {"signals": out, "diagnostics": diagnostics.__dict__}
 
 
 def detect_material_change(

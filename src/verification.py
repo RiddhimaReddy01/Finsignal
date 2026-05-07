@@ -535,8 +535,13 @@ def _build_source_route(question: str, mode: Mode) -> SourceRoutePlan:
         route.news = True
         route.reasons.append("latest_query_requires_news")
     elif mode == "mba_framework":
-        route.news = True
-        route.transcript = True
+        # Framework analysis is filing-first; add news/transcript only when query asks for them.
+        if any(t in ql for t in LATEST_TRIGGERS):
+            route.news = True
+            route.reasons.append("framework_query_requests_news_context")
+        if any(t in ql for t in TRANSCRIPT_TRIGGERS):
+            route.transcript = True
+            route.reasons.append("framework_query_requests_management_context")
         route.reasons.extend(["framework_can_use_multi_source_evidence"])
 
     return route
@@ -1130,6 +1135,11 @@ def verify_evidence(
             if (b.kind == "chunk" and (b.item or "").lower().startswith("item 1a")) or (b.kind == "transcript" and "risk" in b.text.lower())
         ),
     }
+    # Only treat route sources as "required missing" when policy makes them mandatory.
+    required_by_policy: Set[str] = set(req.required_all_sources or [])
+    if len(req.required_any_sources) == 1:
+        required_by_policy.update(req.required_any_sources)
+
     planned_required_missing: List[str] = []
     for src, required in (
         ("filing", bool(route.filing)),
@@ -1137,7 +1147,7 @@ def verify_evidence(
         ("transcript", bool(route.transcript)),
         ("market_data", bool(route.market_data)),
     ):
-        if required and not source_coverage.get(src, False):
+        if required and src in required_by_policy and not source_coverage.get(src, False):
             planned_required_missing.append(src)
     if planned_required_missing:
         signals["planned_required_missing"] = planned_required_missing
